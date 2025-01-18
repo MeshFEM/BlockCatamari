@@ -1311,6 +1311,7 @@ inline void MatrixMultiplyAdjointNormal(
 }
 #endif  // ifdef CATAMARI_HAVE_BLAS
 
+#if 0
 template <class Field>
 void LowerNormalHermitianOuterProductDynamicBLASDispatch(
     const ComplexBase<Field>& alpha,
@@ -1359,6 +1360,7 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
         }
     }
 }
+#endif
 
 template <class Field>
 void LowerNormalHermitianOuterProductDynamicBLASDispatch(
@@ -1375,7 +1377,7 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
     // performs well if the output matrix fits in cache or if only a rank 1 matrix is added.
     //
 #ifdef DARWIN
-    const bool use_blas = (output_height > 128 && contraction_size > 1);
+    const bool use_blas = (output_height > 48 && contraction_size > 4);
 #else
     const bool use_blas = (output_height > 64 && contraction_size > 1);
 #endif
@@ -1384,7 +1386,7 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
     }
 #endif
 
-  using EVec = Eigen::Matrix<Field, Eigen::Dynamic, 1>;
+  // using EVec = Eigen::Matrix<Field, Eigen::Dynamic, 1>;
   int k_start = 0;
   if (beta == Field(0)) {
       const Field *col_k = left_matrix.Pointer(0, 0);

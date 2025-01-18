@@ -8,11 +8,9 @@
 #ifndef CATAMARI_DENSE_BASIC_LINEAR_ALGEBRA_OPENMP_IMPL_H_
 #define CATAMARI_DENSE_BASIC_LINEAR_ALGEBRA_OPENMP_IMPL_H_
 
-#include "catamari/blas.hpp"
 #include "catamari/macros.hpp"
 
 #include "catamari/dense_basic_linear_algebra.hpp"
-#include "../../../src/lib/MeshFEM/ParallelVectorOps.hh"
 
 #include <tbb/task_group.h>
 

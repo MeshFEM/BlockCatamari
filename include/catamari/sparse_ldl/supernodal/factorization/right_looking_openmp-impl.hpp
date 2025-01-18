@@ -19,6 +19,8 @@
 #include "../../../../../../../src/lib/MeshFEM/GlobalBenchmark.hh"
 #include "../../../../../../../src/lib/MeshFEM/ParallelVectorOps.hh"
 #include "SchurComplementStorage.hpp"
+#include <cassert>
+#include "../catamari_config.hh"
 
 #define FINEGRAINED_PARALLELISM 0
 
@@ -62,10 +64,12 @@ bool Factorization<Field>::OpenMPRightLookingSupernodeFinalize(
           control_.factorization_type, dynamic_reg_params, &diagonal_block,
           &multithreaded_buffer, &result->dynamic_regularization);
 #else
+      FG_START_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
       num_supernode_pivots = FactorDiagonalBlock(
           control_.block_size,
           control_.factorization_type, dynamic_reg_params, &diagonal_block,
           &result->dynamic_regularization);
+      FG_STOP_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
 #endif
       result->num_successful_pivots += num_supernode_pivots;
 
@@ -92,6 +96,7 @@ bool Factorization<Field>::OpenMPRightLookingSupernodeFinalize(
     InversePermuteColumns(permutation, &lower_block);
   }
 
+  FG_START_TIMER(shared_state->finegrained_timers, supernode, SolveDiag);
 #if 1
   SolveAgainstDiagonalBlock(control_.factorization_type,
                             diagonal_block.ToConst(), &lower_block);
@@ -118,10 +123,12 @@ bool Factorization<Field>::OpenMPRightLookingSupernodeFinalize(
        &leading_dim_blas);
   }
 #endif
+  FG_STOP_TIMER(shared_state->finegrained_timers, supernode, SolveDiag);
 
   if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
 
   if (control_.factorization_type == kCholeskyFactorization) {
+    FG_START_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
     BlasMatrixView<Field>& schur_complement = shared_state->schur_complements[supernode];
 #if 1
     LowerNormalHermitianOuterProductDynamicBLASDispatch(
@@ -132,6 +139,7 @@ bool Factorization<Field>::OpenMPRightLookingSupernodeFinalize(
                                      Real{-1}, lower_block_transpose,
                                      has_children ? Real{1} : Real{0}, &schur_complement);
 #endif
+    FG_STOP_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
   } else {
     const int thread = tbb::this_task_arena::current_thread_index(); // TODO(Julian Panetta): switch to thread-local storage
     PrivateState<Field> &private_state = (*private_states)[thread];
@@ -176,7 +184,7 @@ void MergeChildSchurComplement(Int supernode, Int child,
                                BlasMatrixView<Field> lower_block,
                                BlasMatrixView<Field> diagonal_block,
                                BlasMatrixView<Field> schur_complement,
-                               Factorization<Field> &ldl,
+                               Factorization<Field> &ldl, RightLookingSharedState<Field> &shared_state,
                                bool first_merge) {
     const Int child_degree = child_schur_complement.height;
     const Int sno = ordering.supernode_offsets[supernode];
@@ -191,6 +199,7 @@ void MergeChildSchurComplement(Int supernode, Int child,
     const Int supernode_size = ordering.supernode_sizes[supernode];
 
     if (first_merge) {
+        FG_START_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns); // This is not entirely ccurate since it includes part of the first child merge time :(
         // Initialize each of the supernode's columns of the factor
         // and merge in the first child's Schur complement.
         for (Int j = 0, cj = 0; j < supernode_size; ++j) {
@@ -205,7 +214,9 @@ void MergeChildSchurComplement(Int supernode, Int child,
                 factor_column[child_rel_indices[i]] += child_column[i];
             ++cj;
         }
+        FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
+        FG_START_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
 #if 1 // This version seems faster...
         eigenMap(schur_complement).setZero();
         for (Int j = num_child_diag_indices; j < child_degree; ++j) {
@@ -232,8 +243,10 @@ void MergeChildSchurComplement(Int supernode, Int child,
             ++cj;
         }
 #endif
+        FG_STOP_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
     }
     else {
+        FG_START_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
         // Add the child Schur complement into this supernode's front.
         for (Int j = 0; j < num_child_diag_indices; ++j) {
             const Field* child_column = child_schur_complement.Pointer(0, j);
@@ -249,6 +262,7 @@ void MergeChildSchurComplement(Int supernode, Int child,
             for (Int i = j; i < child_degree; ++i)
                 schur_column[child_rel_indices[i]] += child_column[i];
         }
+        FG_STOP_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
     }
 }
 
@@ -363,12 +377,14 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
   const bool parallel = (work_estimate >= min_parallel_work) && (num_children > 1);
 
   // Clear this supernode's factor columns and load matrix entries into them.
-  auto init = [&](){
+  auto init = [&]() {
+    FG_START_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
     BlasMatrixView<Field> diagonal_block = diagonal_factor_->blocks[supernode];
     const Int sno = ordering_.supernode_offsets[supernode];
     const Int supernode_size = ordering_.supernode_sizes[supernode];
     for (Int j = 0; j < supernode_size; ++j)
         InitializeFactorColumn(sno + j, j, diagonal_block);
+    FG_STOP_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
   };
 
   // std::vector<Int> sorted_children(num_children);
@@ -407,15 +423,10 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
 
       // Construct a stack for holding the child schur complements of the subtree rooted at `supernode` (if it doesn't exist already)
       if (subtreeStorage == nullptr) {
-#if CUSTOM_TIMERS
-          shared_state->custom_timers[supernode].Start();
-#endif
-          // std::cout << "Allocating subtree storage at supernode: " << supernode << std::endl;
+          FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation);
           subtreeStorage = &(shared_state->schur_complement_storage[supernode]);
           subtreeStorage->reallocate(subtreeStorage->getStoragedNeeded(supernode, ordering_.assembly_forest, *lower_factor_));
-#if CUSTOM_TIMERS
-          shared_state->custom_timers[supernode].Stop();
-#endif
+          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
       }
 
       if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
@@ -427,7 +438,10 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
           const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
 
           SparseLDLResult<Field> resultContrib;
+
+          FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
           process_child(child, &resultContrib, subtreeStorage);
+          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
 
           MergeContribution(resultContrib, result);
           if (dynamic_reg_params.enabled) assert(false); /* MergeDynamicRegularizations(result_contributions, result); */
@@ -438,7 +452,7 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
           auto &sc_child = shared_state->schur_complements[child];
           MergeChildSchurComplement(supernode, child, ordering_,
                   lower_factor_.get(), sc_child,
-                  lower_block, diagonal_block, shared_state->schur_complements[supernode], *this, /* first_merge = */ child_index == 0);
+                  lower_block, diagonal_block, shared_state->schur_complements[supernode], *this, *shared_state, /* first_merge = */ child_index == 0);
 
           // Pop the child Schur complement from the stack.
           // Note: this will not deallocate the stack itself; that is done by the
@@ -448,6 +462,7 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
       }
   }
   else {
+      FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
       tbb::task_group tg;
       Buffer<SparseLDLResult<Field>> result_contributions(num_children);
       for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
@@ -460,14 +475,22 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
       process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
       if (shared_state->hasFailed()) tg.cancel();
       auto status = tg.wait();
+      FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+
       if (status != tbb::task_group_status::complete)
           shared_state->setFailed();
 
       if (!shared_state->hasFailed()) {
+          FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation);
           allocate_schur_complement();
+          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+
+          FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchur);
           MergeChildSchurComplements(supernode, *this, shared_state->schur_complements);
+          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchur);
       }
 
+      FG_START_TIMER(shared_state->finegrained_timers, supernode, Deallocation);
       // Clear out all storage used by descendants' fronts.
       for (Int child_index = 0; child_index < num_children; ++child_index) {
         const Int child = ordering_.assembly_forest.children[child_beg + child_index];
@@ -476,6 +499,7 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
         sc.data = nullptr;
         shared_state->schur_complement_storage[child].deallocate();
       }
+      FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Deallocation);
 
       for (Int child_index = 0; child_index < num_children; ++child_index)
           MergeContribution(result_contributions[child_index], result);
@@ -503,12 +527,6 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
       std::cout << "Serial memory required with expand-in-place: " << SchurComplementStorage<Field>::storageNeededExpandInPlace(af.roots[0], af, lf) << std::endl;
       std::cout << "Serial memory required with expand-in-place (optimal ordering): " << SchurComplementStorage<Field>::storageNeededExpandInPlaceOptimal(af.roots[0], af, lf) << std::endl;
   }
-#endif
-
-#if CUSTOM_TIMERS
-  shared_state_.custom_timers.Resize(num_supernodes);
-  for (Int i = 0; i < num_supernodes; ++i)
-      shared_state_.custom_timers[i].Reset();
 #endif
 
   BENCHMARK_SCOPED_TIMER_SECTION timer("OpenMPRightLooking");
@@ -621,6 +639,10 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
   shared_state.exclusive_timers.Resize(num_supernodes);
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
+#ifdef CATAMARI_FINEGRAINED_TIMERS
+  shared_state.finegrained_timers.allocate(num_supernodes);
+#endif  // ifdef CATAMARI_FINEGRAINED_TIMERS
+
   SparseLDLResult<Field> result;
 
   shared_state.unsetFailed();
@@ -634,7 +656,9 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
       bool success = OpenMPRightLookingSubtree(
               root, matrix, subparams, work_estimates, min_parallel_work,
               &shared_state, &private_states, &result_contributions[root_index]);
+      FG_START_TIMER(shared_state.finegrained_timers, root, Deallocation);
       shared_state.schur_complement_storage[root].deallocate();
+      FG_STOP_TIMER(shared_state.finegrained_timers, root, Deallocation);
       if (!success) shared_state.setFailed();
   };
 
@@ -678,14 +702,6 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
       ordering_.assembly_forest, control_.max_timing_levels,
       control_.avoid_timing_isolated_roots);
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
-
-#if CUSTOM_TIMERS
-  double totalTime = 0;
-  for (Int i = 0; i < num_supernodes; ++i) {
-      totalTime += shared_state.custom_timers[i].TotalSeconds();
-  }
-  std::cout << "Stack allocation time: " << totalTime << std::endl;
-#endif
 
   return result;
 }

@@ -404,6 +404,10 @@ class Factorization {
     return result;
   }
 
+  void WriteFinegrainedTimerStats(const std::string &directory, Int maxLevels = std::numeric_limits<Int>::max()) const {
+      shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, maxLevels);
+  }
+
  private:
   // The control structure for the factorization.
   Control<Field> control_;

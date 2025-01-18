@@ -13,9 +13,10 @@
 #include "catamari/symmetric_ordering.hpp"
 
 #include "catamari_config.hh"
+
 #include "factorization/SchurComplementStorage.hpp"
 
-#if defined(CATAMARI_ENABLE_TIMERS) || CUSTOM_TIMERS
+#if defined(CATAMARI_ENABLE_TIMERS) || defined(CATAMARI_FINEGRAINED_TIMERS)
 #include "quotient/timer.hpp"
 #endif
 
@@ -102,6 +103,37 @@ struct LeftLookingSharedState {
 
 #include <atomic>
 
+struct FineGrainedTimers {
+  // Fine-grained timers accumulated per-supernode (threadsafe).
+  enum Type { InitializeColumns = 0, Allocation, Recurse, MergeSchur, Deallocation, OuterProduct, FactorDiag, SolveDiag, NumTimers };
+  std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
+
+  static std::string nameForType(Type type) {
+    switch (type) {
+      case InitializeColumns: return "InitializeColumns";
+      case Allocation:        return "Allocation";
+      case Recurse:           return "Recurse";
+      case MergeSchur:        return "MergeSchur";
+      case Deallocation:      return "Deallocation";
+      case OuterProduct:      return "OuterProduct";
+      case FactorDiag:        return "FactorDiag";
+      case SolveDiag:         return "SolveDiag";
+      case NumTimers:
+      default:                return "Unknown";
+    }
+  }
+
+  void allocate(Int num_supernodes) {
+    for (auto &timer : finegrained_timers)
+      timer.Resize(num_supernodes);
+  }
+
+  const Buffer<quotient::Timer>& operator[](Type type) const { return finegrained_timers[type]; }
+        Buffer<quotient::Timer>& operator[](Type type)       { return finegrained_timers[type]; }
+
+  quotient::Timer& operator()(Int supernode, Type type) { return (*this)[type][supernode]; }
+};
+
 template <typename Field>
 struct RightLookingSharedState {
   RightLookingSharedState() { unsetFailed(); }
@@ -116,10 +148,6 @@ struct RightLookingSharedState {
   //  we use the `schur_complement_storage` stack below instead!)
   Buffer<Buffer<Field>> schur_complement_buffers;
 
-#if CUSTOM_TIMERS
-  Buffer<quotient::Timer> custom_timers;
-#endif
-
   Buffer<SchurComplementStorage<Field>> schur_complement_storage;
 
   void unsetFailed() { m_fail.store(false, std::memory_order_relaxed); }
@@ -127,12 +155,27 @@ struct RightLookingSharedState {
   bool   hasFailed() const { return m_fail.load(std::memory_order_relaxed); }
 
 #ifdef CATAMARI_ENABLE_TIMERS
-  // A separate timer for each supernode's inclusive processing time.
-  Buffer<quotient::Timer> inclusive_timers;
-
-  // A separate timer for each supernode's exclusive processing time.
-  Buffer<quotient::Timer> exclusive_timers;
+  Buffer<quotient::Timer> inclusive_timers, exclusive_timers; // Jack Poulson's original timers
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
+
+#if CATAMARI_FINEGRAINED_TIMERS
+  FineGrainedTimers finegrained_timers;
+#endif  // CATAMARI_FINEGRAINED_TIMERS
+
+  void WriteFinegrainedTimerStats(const std::string &directory [[maybe_unused]], const AssemblyForest &assembly_forest, Int maxLevels) const {
+#if CATAMARI_FINEGRAINED_TIMERS
+    for (Int i = 0; i < finegrained_timers.NumTimers; ++i) {
+        auto type = FineGrainedTimers::Type(i);
+        std::string filename = directory + "/" + FineGrainedTimers::nameForType(type) + ".dot";
+        TruncatedForestTimersToDot(
+              filename, finegrained_timers[type],
+              assembly_forest, maxLevels,
+              /* avoid_isolated_roots = */ false);
+    }
+#else
+    throw std::runtime_errors("Fine-grained timers not enabled!");
+#endif
+  }
 
 private:
   std::atomic<bool> m_fail; // Global flag to indicate factorization failure and accelerate early-exit in parallel case.
