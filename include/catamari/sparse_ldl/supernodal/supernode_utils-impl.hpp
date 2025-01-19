@@ -613,8 +613,8 @@ void FillSubtreeWorkEstimates(Int root, const AssemblyForest& supernode_forest,
       lower_factor.blocks[root].ToConst();
   const Int supernode_size = lower_block.width;
   const Int degree = lower_block.height;
-  (*work_estimates)[root] += std::pow(1. * supernode_size, 3.) / 3;
-  (*work_estimates)[root] += std::pow(1. * degree, 2.) * supernode_size;
+  (*work_estimates)[root] += std::pow(1. * supernode_size, 3.) / 3;      // Elimination
+  (*work_estimates)[root] += std::pow(1. * degree, 2.) * supernode_size; // Outer product to form Schur complement
 }
 
 template <class Field>

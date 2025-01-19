@@ -607,7 +607,7 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
   Buffer<double> &work_estimates = work_estimates_;
   double &total_work = total_work_;
   if (work_estimates.Size() != num_supernodes) {
-      work_estimates.Resize(num_supernodes);
+      work_estimates.Resize(num_supernodes, 0.0); // Must be initialized!
       for (const Int& root : ordering_.assembly_forest.roots) {
           FillSubtreeWorkEstimates(root, ordering_.assembly_forest, *lower_factor_,
                   &work_estimates);
@@ -639,7 +639,7 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
   shared_state.exclusive_timers.Resize(num_supernodes);
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
-#ifdef CATAMARI_FINEGRAINED_TIMERS
+#if CATAMARI_FINEGRAINED_TIMERS
   shared_state.finegrained_timers.allocate(num_supernodes);
 #endif  // ifdef CATAMARI_FINEGRAINED_TIMERS
 
