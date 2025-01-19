@@ -13,35 +13,33 @@
 #include <iostream>
 #include <ostream>
 #include <string>
+#include <functional>
 
-#include "catamari/io_utils.hpp"
+#include "blas_matrix_view.hpp"
 
 namespace catamari {
 
-inline void TruncatedNodeLabelRecursion(Int supernode,
-                                        const Buffer<quotient::Timer>& timers,
-                                        const AssemblyForest& forest, Int level,
-                                        Int max_levels, std::ofstream& file) {
+inline void TruncatedDotNodeWriterRecursion(Int supernode,
+                                    const std::function<std::string(Int)> &nodeLabel,
+                                    const AssemblyForest& forest, Int level,
+                                    Int max_levels, std::ofstream& file) {
   if (level > max_levels) {
     return;
   }
 
   // Write out this node's label.
-  file << "  " << supernode << " [label=\"" << timers[supernode].TotalSeconds()
-       << "\"]\n";
+  file << "  " << supernode << " [label=\"" << nodeLabel(supernode) << "\"]\n";
 
   const Int child_beg = forest.child_offsets[supernode];
   const Int child_end = forest.child_offsets[supernode + 1];
   const Int num_children = child_end - child_beg;
   for (Int child_index = 0; child_index < num_children; ++child_index) {
     const Int child = forest.children[child_beg + child_index];
-    TruncatedNodeLabelRecursion(child, timers, forest, level + 1, max_levels,
-                                file);
+    TruncatedDotNodeWriterRecursion(child, nodeLabel, forest, level + 1, max_levels, file);
   }
 }
 
 inline void TruncatedNodeEdgeRecursion(Int supernode,
-                                       const Buffer<quotient::Timer>& timers,
                                        const AssemblyForest& forest, Int level,
                                        Int max_levels, std::ofstream& file) {
   if (level >= max_levels) {
@@ -55,16 +53,15 @@ inline void TruncatedNodeEdgeRecursion(Int supernode,
   for (Int child_index = 0; child_index < num_children; ++child_index) {
     const Int child = forest.children[child_beg + child_index];
     file << "  " << supernode << " -> " << child << "\n";
-    TruncatedNodeEdgeRecursion(child, timers, forest, level + 1, max_levels,
-                               file);
+    TruncatedNodeEdgeRecursion(child, forest, level + 1, max_levels, file);
   }
 }
 
-inline void TruncatedForestTimersToDot(const std::string& filename,
-                                       const Buffer<quotient::Timer>& timers,
-                                       const AssemblyForest& forest,
-                                       Int max_levels,
-                                       bool avoid_isolated_roots) {
+inline void WriteTruncatedForestToDot(const std::string& filename,
+                                      const std::function<std::string(Int)> &nodeLabel,
+                                      const AssemblyForest& forest,
+                                      Int max_levels,
+                                      bool avoid_isolated_roots) {
   std::ofstream file(filename);
   if (!file.is_open()) {
     std::cerr << "Could not open " << filename << std::endl;
@@ -82,8 +79,7 @@ inline void TruncatedForestTimersToDot(const std::string& filename,
     const Int root = forest.roots[root_index];
     if (!avoid_isolated_roots ||
         forest.child_offsets[root] != forest.child_offsets[root + 1]) {
-      TruncatedNodeLabelRecursion(root, timers, forest, level, max_levels,
-                                  file);
+      TruncatedDotNodeWriterRecursion(root, nodeLabel, forest, level, max_levels, file);
     }
   }
 
@@ -94,12 +90,45 @@ inline void TruncatedForestTimersToDot(const std::string& filename,
     const Int root = forest.roots[root_index];
     if (!avoid_isolated_roots ||
         forest.child_offsets[root] != forest.child_offsets[root + 1]) {
-      TruncatedNodeEdgeRecursion(root, timers, forest, level, max_levels, file);
+      TruncatedNodeEdgeRecursion(root, forest, level, max_levels, file);
     }
   }
 
   // Write out the footer.
   file << "}\n";
+}
+
+inline void TruncatedForestTimersToDot(const std::string& filename,
+                                       const Buffer<quotient::Timer>& timers,
+                                       const AssemblyForest& forest,
+                                       Int max_levels,
+                                       bool avoid_isolated_roots) {
+  auto nodeLabel = [&timers](Int supernode){ return std::to_string(timers[supernode].TotalSeconds()); };
+  return WriteTruncatedForestToDot(filename, nodeLabel, forest, max_levels, avoid_isolated_roots);
+}
+
+// Write the full forest in a simple custom format that will be fast to parse
+// (the DOT parsers available from Python libraries are slow).
+// The format is as follows:
+//  n <node_label>      # for each supernode
+//  e <child> <parent>  # for each edge
+inline void WriteForestWithNodeLabels(const std::string& filename,
+                                      const std::function<std::string(Int)> &nodeLabel,
+                                      const AssemblyForest& forest) {
+    std::ofstream file(filename);
+    Int num_supernodes = forest.child_offsets.Size() - 1;
+    // Write the supernodes
+    for (Int s = 0; s < num_supernodes; ++s)
+        file << "n " << nodeLabel(s) << "\n";
+
+    // Write the edges (child -> parent)
+    for (Int s = 0; s < num_supernodes; ++s) {
+        Int num_children = forest.child_offsets[s + 1] - forest.child_offsets[s];
+        for (Int c = 0; c < num_children; ++c) {
+            Int child = forest.children[forest.child_offsets[s] + c];
+            file << "e " << child << ' ' << s << "\n";
+        }
+    }
 }
 
 #ifdef CATAMARI_HAVE_LIBTIFF

@@ -9,7 +9,8 @@
 #define CATAMARI_BUFFER_C_H_
 
 #include "catamari/blas.hpp"
-#include "catamari/integers.hpp"
+#include "catamari/integers.h"
+#include "catamari/macros.h"
 
 #ifdef __cplusplus
 extern "C" {

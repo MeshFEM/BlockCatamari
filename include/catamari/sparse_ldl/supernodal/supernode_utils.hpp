@@ -20,6 +20,8 @@
 #include "quotient/timer.hpp"
 #endif
 
+#include <stdexcept>
+
 namespace catamari {
 
 struct SupernodalRelaxationControl {
@@ -124,8 +126,10 @@ struct FineGrainedTimers {
   }
 
   void allocate(Int num_supernodes) {
-    for (auto &timer : finegrained_timers)
+    for (auto &timer : finegrained_timers) {
+      timer.Clear();
       timer.Resize(num_supernodes);
+    }
   }
 
   const Buffer<quotient::Timer>& operator[](Type type) const { return finegrained_timers[type]; }
@@ -164,6 +168,7 @@ struct RightLookingSharedState {
 
   void WriteFinegrainedTimerStats(const std::string &directory [[maybe_unused]], const AssemblyForest &assembly_forest, Int maxLevels) const {
 #if CATAMARI_FINEGRAINED_TIMERS
+#if 0
     for (Int i = 0; i < finegrained_timers.NumTimers; ++i) {
         auto type = FineGrainedTimers::Type(i);
         std::string filename = directory + "/" + FineGrainedTimers::nameForType(type) + ".dot";
@@ -172,8 +177,22 @@ struct RightLookingSharedState {
               assembly_forest, maxLevels,
               /* avoid_isolated_roots = */ false);
     }
+#endif
+
+    // Faster-to-parse format
+    WriteForestWithNodeLabels(directory + "/timers.txt", [&](Int supernode) {
+        std::stringstream result;
+        result << "{ ";
+        for (Int i = 0; i < finegrained_timers.NumTimers; ++i) {
+            auto type = FineGrainedTimers::Type(i);
+            if (i > 0) result << ", ";
+            result << '"' << FineGrainedTimers::nameForType(type) << "\": " << finegrained_timers[type][supernode].TotalSeconds();
+        }
+        result << " }";
+        return result.str();
+    }, assembly_forest);
 #else
-    throw std::runtime_errors("Fine-grained timers not enabled!");
+    throw std::runtime_error("Fine-grained timers not enabled!");
 #endif
   }
 

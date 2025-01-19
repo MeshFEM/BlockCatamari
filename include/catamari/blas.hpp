@@ -8,25 +8,25 @@
 #ifndef CATAMARI_BLAS_H_
 #define CATAMARI_BLAS_H_
 
-#include <complex>
+#include <complex> // IWYU pragma: export
 
 #ifdef CATAMARI_HAVE_MKL
 
-#include "catamari/blas/mkl.hpp"
+#include "catamari/blas/mkl.hpp" // IWYU pragma: export
 
 #elif defined(CATAMARI_HAVE_OPENBLAS)
 
-#include "catamari/blas/openblas.hpp"
+#include "catamari/blas/openblas.hpp" // IWYU pragma: export
 
 #elif defined(CATAMARI_HAVE_BLAS)
 
-#include "catamari/blas/genericblas.hpp"
+#include "catamari/blas/genericblas.hpp" // IWYU pragma: export
 
 #endif
 
 #if defined(CATAMARI_HAVE_BLAS) && !defined(CATAMARI_HAVE_BLAS_PROTOS)
 
-#include "catamari/blas/protos.hpp"
+#include "catamari/blas/protos.hpp" // IWYU pragma: export
 
 #endif  // if defined(CATAMARI_HAVE_BLAS) && !defined(CATAMARI_HAVE_BLAS_PROTOS)
 
@@ -46,6 +46,6 @@ int SetNumLocalBlasThreads(int num_threads);
 
 }  // namespace catamari
 
-#include "catamari/blas-impl.hpp"
+#include "catamari/blas-impl.hpp" // IWYU pragma: export
 
 #endif  // ifndef CATAMARI_BLAS_H_

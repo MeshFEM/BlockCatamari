@@ -404,8 +404,60 @@ class Factorization {
     return result;
   }
 
-  void WriteFinegrainedTimerStats(const std::string &directory, Int maxLevels = std::numeric_limits<Int>::max()) const {
-      shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, maxLevels);
+  void WriteFinegrainedTimerStats(const std::string &directory, Int max_levels = std::numeric_limits<Int>::max()) const {
+      shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
+  }
+
+  // Only can be called after `InitialFactorizationSetup` because it needs access to
+  // the supernode degrees via an allocated `lower_factor_`.
+  void WriteSupernodeStats(const std::string& directory, Int max_levels = std::numeric_limits<Int>::max()) const {
+      if (factor_values_.Height() == 0) throw std::runtime_error("Factorization not initialized");
+      const bool has_work_estimates = work_estimates_.Size() == ordering_.supernode_sizes.Size();
+#if 0
+      auto nodeSizeLabel = [this, has_work_estimates](Int supernode) {
+          Int size = ordering_.supernode_sizes[supernode];
+          const BlasMatrixView<Field> &lower_block = lower_factor_->blocks[supernode];
+          std::stringstream ss;
+          ss << "size: " << size << "\\ndeg: " << lower_block.Height();
+          if (has_work_estimates) ss << "\\nwork: " << work_estimates_[supernode];
+          return ss.str();
+      };
+
+      WriteTruncatedForestToDot(directory + "/supernodes.dot", nodeSizeLabel, ordering_.assembly_forest, max_levels, /* avoid_isolated_roots = */ false);
+
+      // Also visualize the parallel flag
+      for (size_t nt = 2; nt < 32; nt *= 2) {
+          double min_parallel_ratio_work = (total_work_ * control_.parallel_ratio_threshold) / nt;
+          double min_parallel_work = std::max(control_.min_parallel_threshold, min_parallel_ratio_work);
+
+          WriteTruncatedForestToDot(directory + "/paralellism_for_nthreads_" + std::to_string(nt) + ".dot",
+              [this, min_parallel_work](Int supernode) { return std::to_string(work_estimates_[supernode] > min_parallel_work); },
+              ordering_.assembly_forest, max_levels, /* avoid_isolated_roots = */ false);
+      }
+#endif
+
+      // Faster-to-parse format
+      WriteForestWithNodeLabels(directory + "/supernodes.txt",
+              [this, has_work_estimates](Int supernode) {
+                  std::stringstream ss;
+                  ss << "{ " << "\"size\": " << ordering_.supernode_sizes[supernode]
+                             << ", \"deg\": " << lower_factor_->blocks[supernode].Height();
+                  if (has_work_estimates) {
+                    ss << ", \"work\": " << work_estimates_[supernode];
+                    ss << ", \"parallel_mask\": [";
+                    for (size_t nt = 2; nt < 32; nt *= 2) {
+                        double min_parallel_ratio_work = (total_work_ * control_.parallel_ratio_threshold) / nt;
+                        double min_parallel_work = std::max(control_.min_parallel_threshold, min_parallel_ratio_work);
+                        if (nt > 2) ss << ", ";
+                        ss << (work_estimates_[supernode] > min_parallel_work);
+                    }
+                    ss << "]";
+                  }
+                  ss << " }";
+
+                  return ss.str();
+              },
+              ordering_.assembly_forest);
   }
 
  private:

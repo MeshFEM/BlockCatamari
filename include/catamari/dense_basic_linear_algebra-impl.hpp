@@ -1377,6 +1377,7 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
     // performs well if the output matrix fits in cache or if only a rank 1 matrix is added.
     //
 #ifdef DARWIN
+    // const bool use_blas = (output_height > 128 && contraction_size > 1);
     const bool use_blas = (output_height > 48 && contraction_size > 4);
 #else
     const bool use_blas = (output_height > 64 && contraction_size > 1);
