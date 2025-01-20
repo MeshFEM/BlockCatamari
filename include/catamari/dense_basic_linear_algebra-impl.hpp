@@ -1387,6 +1387,21 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
     }
 #endif
 
+#if 0 // Eigen is slower...
+  using MatrixType = Eigen::Matrix<Field, Eigen::Dynamic, Eigen::Dynamic>;
+  Eigen::Map<const MatrixType, 0, Eigen::Stride<Eigen::Dynamic, 1>> eigen_left(left_matrix.data, output_height, contraction_size  , Eigen::Stride<Eigen::Dynamic, 1>(left_matrix.leading_dim, 1));
+  Eigen::Map<      MatrixType, 0, Eigen::Stride<Eigen::Dynamic, 1>> eigen_output(output_matrix->data, output_height, output_height, Eigen::Stride<Eigen::Dynamic, 1>(output_matrix->leading_dim, 1));
+
+  assert(alpha == Field(1));
+  if (beta == Field(0)) {
+      eigen_output = eigen_left * eigen_left.transpose();
+  }
+  else {
+      assert(beta == Field(1));
+      eigen_output += eigen_left * eigen_left.transpose();
+  }
+  return;
+#else
   // using EVec = Eigen::Matrix<Field, Eigen::Dynamic, 1>;
   int k_start = 0;
   if (beta == Field(0)) {
@@ -1419,6 +1434,7 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
           }
       }
   }
+#endif
 #endif
 }
 

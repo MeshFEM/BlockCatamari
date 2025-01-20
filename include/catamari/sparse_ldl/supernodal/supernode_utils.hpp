@@ -107,15 +107,16 @@ struct LeftLookingSharedState {
 
 struct FineGrainedTimers {
   // Fine-grained timers accumulated per-supernode (threadsafe).
-  enum Type { InitializeColumns = 0, Allocation, Recurse, MergeSchur, Deallocation, OuterProduct, FactorDiag, SolveDiag, NumTimers };
+  enum Type { InitializeColumns = 0, /* Allocation,  Recurse, */ MergeSchur, MergeSchurInPara, Deallocation, OuterProduct, FactorDiag, SolveDiag, NumTimers };
   std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
 
   static std::string nameForType(Type type) {
     switch (type) {
       case InitializeColumns: return "InitializeColumns";
-      case Allocation:        return "Allocation";
-      case Recurse:           return "Recurse";
+      // case Allocation:        return "Allocation";
+      // case Recurse:           return "Recurse";
       case MergeSchur:        return "MergeSchur";
+      case MergeSchurInPara:  return "MergeSchurInPara";
       case Deallocation:      return "Deallocation";
       case OuterProduct:      return "OuterProduct";
       case FactorDiag:        return "FactorDiag";

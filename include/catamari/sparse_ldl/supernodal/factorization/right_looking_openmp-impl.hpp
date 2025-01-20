@@ -423,10 +423,10 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
 
       // Construct a stack for holding the child schur complements of the subtree rooted at `supernode` (if it doesn't exist already)
       if (subtreeStorage == nullptr) {
-          FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+          // FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation); // Allocation time is apparently pretty negligible, especially if we do multiple numeric factorizations in a row.
           subtreeStorage = &(shared_state->schur_complement_storage[supernode]);
           subtreeStorage->reallocate(subtreeStorage->getStoragedNeeded(supernode, ordering_.assembly_forest, *lower_factor_));
-          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+          // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
       }
 
       if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
@@ -439,9 +439,9 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
 
           SparseLDLResult<Field> resultContrib;
 
-          FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+          // FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
           process_child(child, &resultContrib, subtreeStorage);
-          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+          // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
 
           MergeContribution(resultContrib, result);
           if (dynamic_reg_params.enabled) assert(false); /* MergeDynamicRegularizations(result_contributions, result); */
@@ -462,7 +462,7 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
       }
   }
   else {
-      FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+      // FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
       tbb::task_group tg;
       Buffer<SparseLDLResult<Field>> result_contributions(num_children);
       for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
@@ -475,19 +475,19 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
       process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
       if (shared_state->hasFailed()) tg.cancel();
       auto status = tg.wait();
-      FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+      // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
 
       if (status != tbb::task_group_status::complete)
           shared_state->setFailed();
 
       if (!shared_state->hasFailed()) {
-          FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+          // FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation);
           allocate_schur_complement();
-          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+          // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
 
-          FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchur);
+          FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
           MergeChildSchurComplements(supernode, *this, shared_state->schur_complements);
-          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchur);
+          FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
       }
 
       FG_START_TIMER(shared_state->finegrained_timers, supernode, Deallocation);
