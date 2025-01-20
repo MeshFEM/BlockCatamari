@@ -278,6 +278,7 @@ class Factorization {
       m_inputData.Ax = Ax;
       m_inputData.Bx = Bx;
       m_inputData.sigma = sigma;
+      if (control_.algorithm == kLeftLookingLDL) return LeftLooking(dummy);
       return RightLooking(dummy);
   }
 
@@ -514,7 +515,7 @@ private:
   RightLookingSharedState<Field> shared_state_;
 
   // Performs the initial analysis (and factorization initialization) for a
-  // particular sparisty pattern. Subsequent factorizations with the same
+  // particular sparsity pattern. Subsequent factorizations with the same
   // sparsity pattern can reuse the symbolic analysis.
   void InitialFactorizationSetup(const CoordinateMatrix<Field>& matrix);
 #ifdef CATAMARI_OPENMP
@@ -545,12 +546,6 @@ private:
   SparseLDLResult<Field> OpenMPRightLooking(
       const CoordinateMatrix<Field>& matrix);
 
-  bool LeftLookingSubtree(
-      Int supernode, const CoordinateMatrix<Field>& matrix,
-      const DynamicRegularizationParams<Field>& dynamic_reg_params,
-      LeftLookingSharedState* shared_state, PrivateState<Field>* private_state,
-      SparseLDLResult<Field>* result);
-
   bool RightLookingSubtree(
       Int supernode, const CoordinateMatrix<Field>& matrix,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
@@ -566,7 +561,6 @@ private:
       SchurComplementStorage<Field> *subtreeStorage = nullptr);
 
   void LeftLookingSupernodeUpdate(Int main_supernode,
-                                  const CoordinateMatrix<Field>& matrix,
                                   LeftLookingSharedState* shared_state,
                                   PrivateState<Field>* private_state);
 

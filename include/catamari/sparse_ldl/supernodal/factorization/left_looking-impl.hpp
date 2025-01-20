@@ -21,7 +21,7 @@ namespace supernodal_ldl {
 
 template <class Field>
 void Factorization<Field>::LeftLookingSupernodeUpdate(
-    Int supernode, const CoordinateMatrix<Field>& matrix,
+    Int supernode,
     LeftLookingSharedState* shared_state, PrivateState<Field>* private_state) {
   CATAMARI_START_TIMER(profile.left_looking_update);
   typedef ComplexBase<Field> Real;
@@ -322,70 +322,15 @@ bool Factorization<Field>::LeftLookingSupernodeFinalize(
   return true;
 }
 
-template <class Field>
-bool Factorization<Field>::LeftLookingSubtree(
-    Int supernode, const CoordinateMatrix<Field>& matrix,
-    const DynamicRegularizationParams<Field>& dynamic_reg_params,
-    LeftLookingSharedState* shared_state, PrivateState<Field>* private_state,
-    SparseLDLResult<Field>* result) {
-  const Int child_beg = ordering_.assembly_forest.child_offsets[supernode];
-  const Int child_end = ordering_.assembly_forest.child_offsets[supernode + 1];
-  const Int num_children = child_end - child_beg;
-
-  CATAMARI_START_TIMER(shared_state->inclusive_timers[supernode]);
-
-  Buffer<int> successes(num_children);
-  Buffer<SparseLDLResult<Field>> result_contributions(num_children);
-
-  // Recurse on the children.
-  for (Int child_index = 0; child_index < num_children; ++child_index) {
-    const Int child =
-        ordering_.assembly_forest.children[child_beg + child_index];
-    CATAMARI_ASSERT(ordering_.assembly_forest.parents[child] == supernode,
-                    "Incorrect child index");
-
-    DynamicRegularizationParams<Field> subparams = dynamic_reg_params;
-    subparams.offset = ordering_.supernode_offsets[child];
-    successes[child_index] =
-        LeftLookingSubtree(child, matrix, subparams, shared_state,
-                           private_state, &result_contributions[child_index]);
-  }
-
-  CATAMARI_START_TIMER(shared_state->exclusive_timers[supernode]);
-
-  // Merge the child results (stopping if a failure is detected).
-  bool succeeded = true;
-  for (Int child_index = 0; child_index < num_children; ++child_index) {
-    if (!successes[child_index]) {
-      succeeded = false;
-      break;
-    }
-    MergeContribution(result_contributions[child_index], result);
-  }
-  if (succeeded && dynamic_reg_params.enabled) {
-    MergeDynamicRegularizations(result_contributions, result);
-  }
-
-  if (succeeded) {
-    InitializeBlockColumn(supernode, matrix);
-    LeftLookingSupernodeUpdate(supernode, matrix, shared_state, private_state);
-    succeeded =
-        LeftLookingSupernodeFinalize(supernode, dynamic_reg_params, result);
-  }
-
-  CATAMARI_STOP_TIMER(shared_state->inclusive_timers[supernode]);
-  CATAMARI_STOP_TIMER(shared_state->exclusive_timers[supernode]);
-
-  return succeeded;
-}
-
 // We no longer support OpenMP in the left-looking factorization.
 template <class Field>
 SparseLDLResult<Field> Factorization<Field>::LeftLooking(
-    const CoordinateMatrix<Field>& matrix) {
+    const CoordinateMatrix<Field>& /* matrix */) { // matrix data is accessed via the ConversionPlan!
   typedef ComplexBase<Field> Real;
   CATAMARI_START_TIMER(profile.left_looking);
   const Int num_supernodes = ordering_.supernode_sizes.Size();
+
+  BENCHMARK_SCOPED_TIMER_SECTION timer("LeftLooking");
 
   CATAMARI_START_TIMER(profile.left_looking_allocate);
   LeftLookingSharedState shared_state;
@@ -398,8 +343,9 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
   PrivateState<Field> private_state;
-  private_state.pattern_flags.Resize(matrix.NumRows());
-  private_state.relative_indices.Resize(matrix.NumRows());
+  Int numRows = ordering_.supernode_offsets[num_supernodes];
+  private_state.pattern_flags.Resize(numRows);
+  private_state.relative_indices.Resize(numRows);
   if (control_.factorization_type != kCholeskyFactorization) {
     private_state.scaled_transpose_buffer.Resize(
         left_looking_scaled_transpose_size_, Field{0});
@@ -412,26 +358,34 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
   static const Real kEpsilon = std::numeric_limits<Real>::epsilon();
   DynamicRegularizationParams<Field> dynamic_reg_params;
   dynamic_reg_params.enabled = control_.dynamic_regularization.enabled;
-  dynamic_reg_params.positive_threshold = std::pow(
-      kEpsilon, control_.dynamic_regularization.positive_threshold_exponent);
-  dynamic_reg_params.negative_threshold = std::pow(
-      kEpsilon, control_.dynamic_regularization.negative_threshold_exponent);
-  if (control_.dynamic_regularization.relative) {
-    const Real matrix_max_norm = MaxNorm(matrix);
-    dynamic_reg_params.positive_threshold *= matrix_max_norm;
-    dynamic_reg_params.negative_threshold *= matrix_max_norm;
+  if (dynamic_reg_params.enabled) {
+      throw std::runtime_error("Dynamic regularization suppport is disabled");
+      dynamic_reg_params.positive_threshold = std::pow(
+          kEpsilon, control_.dynamic_regularization.positive_threshold_exponent);
+      dynamic_reg_params.negative_threshold = std::pow(
+          kEpsilon, control_.dynamic_regularization.negative_threshold_exponent);
+      if (control_.dynamic_regularization.relative) {
+        const Real matrix_max_norm = 0; // MaxNorm(matrix); // TODO: get from ConversionPlan
+        dynamic_reg_params.positive_threshold *= matrix_max_norm;
+        dynamic_reg_params.negative_threshold *= matrix_max_norm;
+      }
+      dynamic_reg_params.signatures = &control_.dynamic_regularization.signatures;
+      dynamic_reg_params.inverse_permutation = ordering_.inverse_permutation.Empty()
+                                                   ? nullptr
+                                                   : &ordering_.inverse_permutation;
   }
-  dynamic_reg_params.signatures = &control_.dynamic_regularization.signatures;
-  dynamic_reg_params.inverse_permutation = ordering_.inverse_permutation.Empty()
-                                               ? nullptr
-                                               : &ordering_.inverse_permutation;
 
   // Note that any postordering of the supernodal elimination forest suffices.
   SparseLDLResult<Field> result;
   for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
-    InitializeBlockColumn(supernode, matrix);
-    LeftLookingSupernodeUpdate(supernode, matrix, &shared_state,
-                               &private_state);
+    // InitializeBlockColumn(supernode, matrix);
+    const Int sno = ordering_.supernode_offsets[supernode];
+    const Int supernode_size = ordering_.supernode_sizes[supernode];
+    BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
+    for (Int j = 0, cj = 0; j < supernode_size; ++j)
+        InitializeFactorColumn(sno + j, j, diagonal_block);
+
+    LeftLookingSupernodeUpdate(supernode, &shared_state, &private_state);
 
     dynamic_reg_params.offset = ordering_.supernode_offsets[supernode];
     const bool succeeded =

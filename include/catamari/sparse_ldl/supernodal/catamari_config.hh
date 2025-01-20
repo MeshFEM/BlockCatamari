@@ -8,7 +8,7 @@
 // (setting to 1 obtains the original implementation, which is slightly slower for small matrices but saves memory).
 #define ALLOCATE_SCHUR_COMPLEMENT_OTF 1
 
-#define CATAMARI_FINEGRAINED_TIMERS 1
+#define CATAMARI_FINEGRAINED_TIMERS 0
 
 #if CATAMARI_FINEGRAINED_TIMERS
 #define FG_START_TIMER(timer_struct, supernode, name) timer_struct(supernode, FineGrainedTimers::name).Start()
