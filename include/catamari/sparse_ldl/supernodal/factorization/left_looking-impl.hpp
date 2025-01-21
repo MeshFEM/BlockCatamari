@@ -31,14 +31,14 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
   const Int supernode_degree = lower_block.height;
   const Int supernode_offset = ordering_.supernode_offsets[supernode];
 
-  Int* pattern_flags = private_state->pattern_flags.Data();
+  Int* local_index_for_L_row = private_state->pattern_flags.Data();
   Int* rel_ind = private_state->relative_indices.Data();
 
   // Scatter the pattern of this supernode into pattern_flags.
   // TODO(Jack Poulson): Switch away from pointers to Int members.
   const Int* structure = lower_factor_->StructureBeg(supernode);
   for (Int i = 0; i < supernode_degree; ++i) {
-    pattern_flags[structure[i]] = i;
+    local_index_for_L_row[structure[i]] = i;
   }
 
   shared_state->rel_rows[supernode] = 0;
@@ -57,7 +57,7 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
     const Int descendant_size = descendant_lower_block.width;
 
     const Int descendant_main_rel_row = shared_state->rel_rows[descendant];
-    const Int intersect_size = *shared_state->intersect_ptrs[descendant];
+    const Int intersect_size = *shared_state->intersect_ptrs[descendant]; // How much of descendant's structure falls within this supernode
     CATAMARI_ASSERT(intersect_size > 0, "Non-positive intersection size.");
 
     const Int* descendant_structure =
@@ -97,8 +97,7 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
 
     // Construct mapping of descendant structure to supernode structure.
     const bool inplace_diag_update = intersect_size == supernode_size;
-    const bool inplace_subdiag_update =
-        inplace_diag_update && descendant_degree_remaining == supernode_degree;
+    const bool inplace_subdiag_update = inplace_diag_update && descendant_degree_remaining == supernode_degree;
     if (!inplace_subdiag_update) {
       // Store the relative indices of the diagonal block.
       for (Int i_rel = 0; i_rel < intersect_size; ++i_rel) {
@@ -106,7 +105,7 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
         CATAMARI_ASSERT(
             i >= supernode_offset && i < supernode_offset + supernode_size,
             "Invalid relative diagonal block index.");
-        rel_ind[i_rel] = i - supernode_offset;
+        rel_ind[i_rel] = i - supernode_offset; // Index of local decendent row within this supernode's diagonal block.
       }
     }
 
@@ -205,7 +204,7 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
         for (Int i_rel = intersect_size; i_rel < descendant_main_degree;
              ++i_rel) {
           const Int i = descendant_structure[i_rel];
-          rel_ind[i_rel] = pattern_flags[i];
+          rel_ind[i_rel] = local_index_for_L_row[i];
           CATAMARI_ASSERT(
               rel_ind[i_rel] >= 0 && rel_ind[i_rel] < supernode_degree,
               "Invalid subdiagonal relative index.");
@@ -337,10 +336,6 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
   shared_state.rel_rows.Resize(num_supernodes);
   shared_state.intersect_ptrs.Resize(num_supernodes);
   shared_state.descendants.Initialize(num_supernodes);
-#ifdef CATAMARI_ENABLE_TIMERS
-  shared_state.inclusive_timers.Resize(num_supernodes);
-  shared_state.exclusive_timers.Resize(num_supernodes);
-#endif  // ifdef CATAMARI_ENABLE_TIMERS
 
   PrivateState<Field> private_state;
   Int numRows = ordering_.supernode_offsets[num_supernodes];
@@ -378,12 +373,27 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
   // Note that any postordering of the supernodal elimination forest suffices.
   SparseLDLResult<Field> result;
   for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
+    CATAMARI_START_TIMER(profile.left_looking_update);
+
+    CATAMARI_START_TIMER(profile.initialize_columns);
     // InitializeBlockColumn(supernode, matrix);
     const Int sno = ordering_.supernode_offsets[supernode];
     const Int supernode_size = ordering_.supernode_sizes[supernode];
     BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
+#if 0
     for (Int j = 0, cj = 0; j < supernode_size; ++j)
         InitializeFactorColumn(sno + j, j, diagonal_block);
+#else
+    Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(
+        diagonal_block.data, diagonal_block.LeadingDimension() * diagonal_block.Width()).setZero();
+    m_inputData.injectEntries(sno, sno + supernode_size, factor_values_.Data());
+    if (m_inputData.sigma != 0) {
+        for (Int j = 0, cj = 0; j < supernode_size; ++j)
+            diagonal_block(j, j) += m_inputData.sigma;
+    }
+#endif
+
+    CATAMARI_STOP_TIMER(profile.initialize_columns);
 
     LeftLookingSupernodeUpdate(supernode, &shared_state, &private_state);
 
@@ -403,18 +413,6 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
                     "Did not properly handle relative row offsets.");
   }
 #endif  // ifdef CATAMARI_DEBUG
-
-#ifdef CATAMARI_ENABLE_TIMERS
-  TruncatedForestTimersToDot(
-      control_.inclusive_timings_filename, shared_state.inclusive_timers,
-      ordering_.assembly_forest, control_.max_timing_levels,
-      control_.avoid_timing_isolated_roots);
-  TruncatedForestTimersToDot(
-      control_.exclusive_timings_filename, shared_state.exclusive_timers,
-      ordering_.assembly_forest, control_.max_timing_levels,
-      control_.avoid_timing_isolated_roots);
-#endif  // ifdef CATAMARI_ENABLE_TIMERS
-
   CATAMARI_STOP_TIMER(profile.left_looking);
   return result;
 }

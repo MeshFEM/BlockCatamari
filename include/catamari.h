@@ -10,6 +10,7 @@
 #include <random>
 
 #include "catamari/integers.h"
+#include "catamari/sparse_ldl/supernodal/catamari_config.hh"
 #include "catamari/macros.h"
 
 #include "catamari/blas_matrix_view.h"

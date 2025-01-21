@@ -199,7 +199,7 @@ void MergeChildSchurComplement(Int supernode, Int child,
     const Int supernode_size = ordering.supernode_sizes[supernode];
 
     if (first_merge) {
-        FG_START_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns); // This is not entirely ccurate since it includes part of the first child merge time :(
+        FG_START_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns); // This is not entirely accurate since it includes part of the first child merge time :(
         // Initialize each of the supernode's columns of the factor
         // and merge in the first child's Schur complement.
         for (Int j = 0, cj = 0; j < supernode_size; ++j) {

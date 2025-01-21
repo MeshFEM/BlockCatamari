@@ -171,6 +171,7 @@ struct FactorizationProfile {
   double cholesky_gflops = 0;
 
   quotient::Timer merge;
+  quotient::Timer initialize_columns;
 
   quotient::Timer left_looking;
   quotient::Timer left_looking_allocate;
@@ -189,6 +190,7 @@ struct FactorizationProfile {
         trsm("trsm"),
         cholesky("cholesky"),
         merge("merge"),
+        initialize_columns("initialize_columns"),
         left_looking("left_looking"),
         left_looking_allocate("left_looking_allocate"),
         left_looking_update("left_looking_update"),
@@ -210,6 +212,7 @@ struct FactorizationProfile {
     cholesky.Reset(cholesky.Name());
     cholesky_gflops = 0;
     merge.Reset(merge.Name());
+    initialize_columns.Reset(initialize_columns.Name());
     left_looking.Reset(left_looking.Name());
     left_looking_allocate.Reset(left_looking_allocate.Name());
     left_looking_update.Reset(left_looking_update.Name());
@@ -219,6 +222,7 @@ struct FactorizationProfile {
 
 std::ostream& operator<<(std::ostream& os,
                          const FactorizationProfile& profile) {
+#if 0
   os << profile.scalar_elimination_forest << "\n"
      << profile.supernodal_elimination_forest << "\n"
      << profile.relax_supernodes << "\n"
@@ -244,6 +248,26 @@ std::ostream& operator<<(std::ostream& os,
        << profile.left_looking_update << "\n"
        << profile.left_looking_finalize << std::endl;
   }
+#else
+    os << "{ "
+       << "\"scalar_elimination_forest\": " << profile.scalar_elimination_forest.TotalSeconds() << ", "
+       << "\"supernodal_elimination_forest\": " << profile.supernodal_elimination_forest.TotalSeconds() << ", "
+       << "\"relax_supernodes\": " << profile.relax_supernodes.TotalSeconds() << ", "
+       << "\"initialize_factors\": " << profile.initialize_factors.TotalSeconds() << ", "
+       << "\"merge\": " << profile.merge.TotalSeconds() << ", "
+       << "\"gemm\": " << profile.gemm.TotalSeconds() << ", "
+       << "\"gemm_unpack\": " << profile.gemm_unpack.TotalSeconds() << ", "
+       << "\"herk\": " << profile.herk.TotalSeconds() << ", "
+       << "\"herk_unpack\": " << profile.herk_unpack.TotalSeconds() << ", "
+       << "\"trsm\": " << profile.trsm.TotalSeconds() << ", "
+       << "\"cholesky\": " << profile.cholesky.TotalSeconds() << ", "
+       << "\"initialize_columns\": " << profile.initialize_columns.TotalSeconds() << ", "
+       << "\"left_looking\": " << profile.left_looking.TotalSeconds() << ", "
+       << "\"left_looking_allocate\": " << profile.left_looking_allocate.TotalSeconds() << ", "
+       << "\"left_looking_update\": " << profile.left_looking_update.TotalSeconds() << ", "
+       << "\"left_looking_finalize\": " << profile.left_looking_finalize.TotalSeconds()
+       << " }" << std::endl;
+#endif
   return os;
 }
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
@@ -278,8 +302,15 @@ class Factorization {
       m_inputData.Ax = Ax;
       m_inputData.Bx = Bx;
       m_inputData.sigma = sigma;
-      if (control_.algorithm == kLeftLookingLDL) return LeftLooking(dummy);
+      if (control_.algorithm == kLeftLookingLDL) {
+          auto result = LeftLooking(dummy);
+#ifdef CATAMARI_ENABLE_TIMERS
+          std::cout << profile << std::endl;
+#endif  // ifdef CATAMARI_ENABLE_TIMERS
+        return result;
+      }
       return RightLooking(dummy);
+
   }
 
   struct MatrixData {
@@ -298,6 +329,20 @@ class Factorization {
         diagEntry += sigma;
       }
     }
+
+    // Inject the entries for columns jbegin...jend - 1
+    void injectEntries(const Int jbegin, const Int jend, Field *factorVals) {
+      const ConversionPlan::Entry *begin = cplan->columnData(jbegin);
+      const ConversionPlan::Entry *end   = cplan->columnData(jend);
+      if (Bx) {
+        for (const ConversionPlan::Entry *e = begin; e < end; ++e)
+            factorVals[e->dst] = Ax[e->src] + sigma * Bx[e->src];
+      }
+      else {
+        for (const ConversionPlan::Entry *e = begin; e < end; ++e)
+            factorVals[e->dst] = Ax[e->src];
+      }
+    }
   };
   MatrixData m_inputData;
 
@@ -305,8 +350,9 @@ class Factorization {
   // in values of the matrix `A` or `A + sigma B`
   void InitializeFactorColumn(Int j, Int local_j, BlasMatrixView<Field> &diagonal_block) {
       using VMap = Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>;
-      VMap(diagonal_block.Pointer(local_j, local_j),
-           diagonal_block.leading_dim - local_j).setZero();
+      // Note: diagonal_block.leading_dim is the full nonzero height due to how blocks are interleaved
+      Int numColumnEntries = diagonal_block.leading_dim - local_j; // Number of nonzero entries on the diagonal of L and below
+      VMap(diagonal_block.Pointer(local_j, local_j), numColumnEntries).setZero();
       m_inputData.injectEntries(j, factor_values_.Data(), diagonal_block(local_j, local_j));
   }
 

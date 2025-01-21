@@ -9,6 +9,7 @@
 #define CATAMARI_MACROS_H_
 
 #include "quotient/macros.hpp"
+#include "sparse_ldl/supernodal/catamari_config.hh"
 
 #define CATAMARI_ASSERT(condition, msg) QUOTIENT_ASSERT(condition, msg)
 

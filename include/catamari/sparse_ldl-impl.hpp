@@ -34,7 +34,7 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
     const CoordinateMatrix<Field>& matrix,
     const SparseLDLControl<Field>& control,
     bool symbolic_only) {
-  BENCHMARK_SCOPED_TIMER_SECTION timer("SparseLDL.Factor (no ordering)");
+  BENCHMARK_SCOPED_TIMER_SECTION meshfemtimer("SparseLDL.Factor (no ordering)");
   scalar_factorization.reset();
   supernodal_factorization.reset();
 
@@ -138,7 +138,7 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
     const SparseLDLControl<Field>& control,
     bool symbolic_only) {
-  BENCHMARK_SCOPED_TIMER_SECTION timer("SparseLDL.Factor");
+  BENCHMARK_SCOPED_TIMER_SECTION meshfemtimer("SparseLDL.Factor");
   ScopedEnableFlushToZero scope_guard;
   scalar_factorization.reset();
   supernodal_factorization.reset();

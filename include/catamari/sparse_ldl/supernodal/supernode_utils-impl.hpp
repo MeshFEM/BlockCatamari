@@ -925,7 +925,7 @@ Int FactorDiagonalBlock(
           block_size, dynamic_reg_params, diagonal_block,
           dynamic_regularization);
     } else {
-      num_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(block_size, diagonal_block);
+      num_pivots = LowerCholeskyFactorization(block_size, diagonal_block);
     }
   } else if (factorization_type == kLDLAdjointFactorization) {
     if (dynamic_reg_params.enabled) {
