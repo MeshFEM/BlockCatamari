@@ -303,6 +303,7 @@ class Factorization {
       m_inputData.Bx = Bx;
       m_inputData.sigma = sigma;
       if (control_.algorithm == kLeftLookingLDL) {
+          // auto result = BlockLeftLooking<3>();
           auto result = LeftLooking(dummy);
 #ifdef CATAMARI_ENABLE_TIMERS
           std::cout << profile << std::endl;
@@ -586,6 +587,9 @@ private:
                                const Buffer<Int>& supernode_degrees);
 #endif  // ifdef CATAMARI_OPENMP
 
+
+  template<Int BlockSize>
+  SparseLDLResult<Field> BlockLeftLooking(); // matrix data is accessed via the ConversionPlan!
   SparseLDLResult<Field> LeftLooking(const CoordinateMatrix<Field>& matrix);
 
   SparseLDLResult<Field> RightLooking(const CoordinateMatrix<Field>& matrix);
@@ -605,6 +609,11 @@ private:
       Buffer<PrivateState<Field>>* private_states,
       SparseLDLResult<Field>* result,
       SchurComplementStorage<Field> *subtreeStorage = nullptr);
+
+  template<Int BlockSize>
+  void BlockLeftLookingSupernodeUpdate(Int main_supernode,
+                                       LeftLookingSharedState* shared_state,
+                                       PrivateState<Field>* private_state);
 
   void LeftLookingSupernodeUpdate(Int main_supernode,
                                   LeftLookingSharedState* shared_state,
@@ -672,6 +681,7 @@ private:
 #include "catamari/sparse_ldl/supernodal/factorization/common_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/io-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/left_looking-impl.hpp"
+#include "catamari/sparse_ldl/supernodal/factorization/block_left_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/solve-impl.hpp"
