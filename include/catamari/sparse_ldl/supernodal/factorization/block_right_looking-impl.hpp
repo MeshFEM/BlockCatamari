@@ -89,7 +89,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     if (control_.factorization_type == kCholeskyFactorization) {
         FG_START_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
         BlasMatrixView<Field>& schur_complement = shared_state->schur_complements[supernode];
-        LowerNormalHermitianOuterProductDynamicBLASDispatch( Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
+        LowerNormalHermitianOuterProduct( Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
         FG_STOP_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
     }
 
@@ -123,31 +123,53 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
 
         // Initialize each of the supernode's columns of the factor
         // and merge in the first child's Schur complement.
+        {
+#if 1
+            Int back_j = 0;
+            for (Int cj = 0; cj < num_child_diag_indices; cj += BlockSize) {
+                Int dst_j = child_rel_indices[cj]; // Parent block column into which the child block column is merging
+                Int jnext = dst_j + BlockSize;
+                ldl.InitializeFactorColumns(sno, back_j, jnext, diagonal_block); // Initialize up to the right edge of the destination block column
+
+                const Field* child_column = child_schur_complement.Pointer(0, cj);
+                Field *     factor_column = diagonal_block.Pointer(0, dst_j);
+                // Diagonal block definitely exists
+                for (Int i = cj; i < child_degree; i += BlockSize) {
+                    accumulateBlock<BlockSize>(child_column  + i, child_schur_complement.LeadingDimension(), // src
+                                               factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
+                }
+                back_j = jnext; // Advance to the next uninitialized parent column block.
+            }
+            if (back_j < supernode_size) ldl.InitializeFactorColumns(sno, back_j, supernode_size, diagonal_block); // Initialize remaining columns not intersected by the child
+#else
         for (Int j = 0, cj = 0; j < supernode_size; j += BlockSize) {
             Field* factor_column = diagonal_block.Pointer(0, j);
+            // ldl.InitializeFactorColumns(sno, j, j + BlockSize, diagonal_block); // Initialize up to the right edge of the destination block
             ldl.template InitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
 
             if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != j) continue;
 
             const Field* child_column = child_schur_complement.Pointer(0, cj);
-            // Diagonal block definitely exists
-            accumulateBlock<BlockSize>(child_column  + cj, child_schur_complement.LeadingDimension(), // src
-                                       factor_column +  j, diagonal_block.LeadingDimension());        // dst
-            for (Int i = cj + BlockSize; i < child_degree; i += BlockSize) {
+            for (Int i = cj; i < child_degree; i += BlockSize) {
                 accumulateBlock<BlockSize>(child_column  + i, child_schur_complement.LeadingDimension(), // src
                                            factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
             }
             cj += BlockSize;
         }
+
+#endif
+        }
         FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
         FG_START_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
-        eigenMap(schur_complement).setZero();
+        memset(schur_complement.Data(), 0, schur_complement.Height() * schur_complement.Width() * sizeof(Field));
         for (Int j = num_child_diag_indices; j < child_degree; j += BlockSize) {
+            Int dst_j = child_rel_indices[j] - supernode_size; // Parent block column *within the schur complement* into which the child block column is merging
+
             const Field* child_column = child_schur_complement.Pointer(0, j);
             // Get pointer to the (conceptual) full parent front column, of which schur_complement is the bottom part.
             // Note: parent front's upper-left corner is (-supernode_size, -supernode_size) relative to this block...
-            Field* schur_column = schur_complement.Pointer(-supernode_size, child_rel_indices[j] - supernode_size);
+            Field* schur_column = schur_complement.Pointer(-supernode_size, dst_j);
             for (Int i = j; i < child_degree; i += BlockSize) {
                 accumulateBlock<BlockSize>(child_column + i,              child_schur_complement.LeadingDimension(),  // src
                                            schur_column + child_rel_indices[i], schur_complement.LeadingDimension()); // dst
@@ -225,9 +247,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             const Field* child_column = child_schur_complement.Pointer(0, cj);
 
             // Diagonal block always exists...
-            accumulateBlock<BlockSize>(child_column + cj, child_schur_complement.LeadingDimension(), // src
-                                       factor_column + j, diagonal_block.LeadingDimension());        // dst
-            for (Int i = cj + BlockSize; i < child_degree; i += BlockSize) {
+            for (Int i = cj; i < child_degree; i += BlockSize) {
                 accumulateBlock<BlockSize>(child_column + i, child_schur_complement.LeadingDimension(), // src
                                            factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
             }
@@ -237,12 +257,10 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     }
 
     const Int sc_size = schur_complement.width;
-    eigenMap(schur_complement).setZero();
+    memset(schur_complement.Data(), 0, sc_size * sc_size * sizeof(Field));
     for (Int j = 0; j < sc_size; j += BlockSize) {
         Int front_j = j + supernode_size;
         Field *schur_column = schur_complement.Pointer(-supernode_size, j);
-        // Zero-out block column
-        // VMap(schur_complement.Pointer(0, j), BlockSize * schur_complement.width).setZero();
 
         for (Int ci = 0; ci < num_children; ++ci) {
             Int cj = child_j[ci];
@@ -387,9 +405,22 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             allocate_schur_complement();
             // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
 
+#if 1
+            FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
+            BlasMatrixView<Field> lower_block      = lower_factor_->blocks[supernode];
+            BlasMatrixView<Field> diagonal_block   = diagonal_factor_->blocks[supernode];
+            for (Int child_index = 0; child_index < num_children; ++child_index) {
+                const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
+                BlockMergeChildSchurComplement<BlockSize>(supernode, child, ordering_,
+                        lower_factor_.get(), shared_state->schur_complements[child],
+                        lower_block, diagonal_block, shared_state->schur_complements[supernode], *this, *shared_state, /* first_merge = */ child_index == 0);
+            }
+            FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
+#else
             FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
             BlockMergeChildSchurComplements<BlockSize>(supernode, *this, shared_state->schur_complements);
             FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
+#endif
         }
 
         FG_START_TIMER(shared_state->finegrained_timers, supernode, Deallocation);
@@ -435,7 +466,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     }
 #endif
 
-    BENCHMARK_SCOPED_TIMER_SECTION timer("BlockRightLooking");
+    BENCHMARK_SCOPED_TIMER_SECTION timer("BlockRightLooking<" + std::to_string(BlockSize) + ">");
     typedef ComplexBase<Field> Real;
 
     // const Int max_threads = omp_get_max_threads();

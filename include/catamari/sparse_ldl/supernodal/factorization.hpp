@@ -303,14 +303,14 @@ class Factorization {
       m_inputData.Bx = Bx;
       m_inputData.sigma = sigma;
       if (control_.algorithm == kLeftLookingLDL) {
-          // auto result = BlockLeftLooking<3>();
+          // auto result = BlockLeftLooking<2>();
           auto result = LeftLooking(dummy);
 #ifdef CATAMARI_ENABLE_TIMERS
           std::cout << profile << std::endl;
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
         return result;
       }
-      // return BlockRightLooking<3>();
+      // return BlockRightLooking<2>();
       return RightLooking(dummy);
   }
 
@@ -365,6 +365,26 @@ class Factorization {
       if (m_inputData.sigma != 0) {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
+      }
+  }
+
+  void InitializeFactorColumns(Int supernode_offset, Int jstart, Int jend, BlasMatrixView<Field> &diagonal_block) {
+      // Zero out this block column
+      Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(diagonal_block.Pointer(0, jstart), diagonal_block.LeadingDimension() * (jend - jstart)).setZero();
+      m_inputData.injectEntries(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
+      if (m_inputData.sigma != 0) {
+          for (Int c = jstart; c < jend; ++c)
+              diagonal_block(c, c) += m_inputData.sigma;
+      }
+  }
+
+  void InitializeFactorSupernodeColumns(Int supernode_offset, Int supernode_size, BlasMatrixView<Field> &diagonal_block) {
+      // Zero out this block column
+      Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(diagonal_block.Pointer(0, 0), diagonal_block.LeadingDimension() * supernode_size).setZero();
+      m_inputData.injectEntries(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
+      if (m_inputData.sigma != 0) {
+          for (Int c = 0; c < supernode_size; ++c)
+              diagonal_block(c, c) += m_inputData.sigma;
       }
   }
 

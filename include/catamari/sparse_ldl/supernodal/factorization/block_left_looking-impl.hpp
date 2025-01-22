@@ -26,9 +26,7 @@ namespace supernodal_ldl {
 
 template <class Field>
 template <Int BlockSize>
-void Factorization<Field>::BlockLeftLookingSupernodeUpdate(
-    Int supernode,
-    LeftLookingSharedState* shared_state, PrivateState<Field>* private_state) {
+void Factorization<Field>::BlockLeftLookingSupernodeUpdate(Int supernode, LeftLookingSharedState* shared_state, PrivateState<Field>* private_state) {
     CATAMARI_START_TIMER(profile.left_looking_update);
     typedef ComplexBase<Field> Real;
     BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
@@ -230,18 +228,8 @@ SparseLDLResult<Field> Factorization<Field>::BlockLeftLooking() { // matrix data
         const Int sno = ordering_.supernode_offsets[supernode];
         const Int supernode_size = ordering_.supernode_sizes[supernode];
         BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
-#if 0
-        for (Int j = 0, cj = 0; j < supernode_size; ++j)
-            InitializeFactorColumn(sno + j, j, diagonal_block);
-#else
-        Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(
-                diagonal_block.data, diagonal_block.LeadingDimension() * diagonal_block.Width()).setZero();
-        m_inputData.injectEntries(sno, sno + supernode_size, factor_values_.Data());
-        if (m_inputData.sigma != 0) {
-            for (Int j = 0, cj = 0; j < supernode_size; ++j)
-                diagonal_block(j, j) += m_inputData.sigma;
-        }
-#endif
+
+        InitializeFactorSupernodeColumns(sno, supernode_size, diagonal_block);
 
         CATAMARI_STOP_TIMER(profile.initialize_columns);
 
