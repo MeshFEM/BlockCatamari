@@ -37,6 +37,7 @@ struct ConversionPlan {
 
     void resize(size_t size) { m_entries.Resize(size); }
     bool empty() const { return m_entries.Size() == 0; }
+    Int size() const { return m_entries.Size(); }
 
     const Entry *entries() const { return m_entries.Data(); }
           Entry *entries()       { return m_entries.Data(); }
@@ -303,15 +304,15 @@ class Factorization {
       m_inputData.Bx = Bx;
       m_inputData.sigma = sigma;
       if (control_.algorithm == kLeftLookingLDL) {
-          // auto result = BlockLeftLooking<2>();
-          auto result = LeftLooking(dummy);
+          auto result = BlockLeftLooking<1>();
+          // auto result = LeftLooking(dummy);
 #ifdef CATAMARI_ENABLE_TIMERS
           std::cout << profile << std::endl;
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
         return result;
       }
-      // return BlockRightLooking<2>();
-      return RightLooking(dummy);
+      return BlockRightLooking<1>();
+      // return RightLooking(dummy);
   }
 
   struct MatrixData {
