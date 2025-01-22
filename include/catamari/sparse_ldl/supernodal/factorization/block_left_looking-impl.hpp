@@ -24,16 +24,6 @@
 namespace catamari {
 namespace supernodal_ldl {
 
-template<Int BlockSize, class Field>
-void accumulateBlock(const Field *__restrict src, const Int src_leading_dim, Field *__restrict dst, Int dst_leading_dim) {
-    for (Int cj = 0; cj < BlockSize; ++cj) {
-        for (Int ci = 0; ci < BlockSize; ++ci)
-            dst[ci] += src[ci];
-        src += src_leading_dim;
-        dst += dst_leading_dim;
-    }
-}
-
 template <class Field>
 template <Int BlockSize>
 void Factorization<Field>::BlockLeftLookingSupernodeUpdate(

@@ -17,6 +17,17 @@
 
 namespace catamari {
 
+// src.block<N, N> += dst.block<N, N>
+template<Int N, class Field>
+void accumulateBlock(const Field *__restrict src, const Int src_leading_dim, Field *__restrict dst, Int dst_leading_dim) {
+    for (Int cj = 0; cj < N; ++cj) {
+        for (Int ci = 0; ci < N; ++ci)
+            dst[ci] += src[ci];
+        src += src_leading_dim;
+        dst += dst_leading_dim;
+    }
+}
+
 template <class Field>
 void ConjugateMatrix(BlasMatrixView<Field>* matrix) {
   const Int height = matrix->height;

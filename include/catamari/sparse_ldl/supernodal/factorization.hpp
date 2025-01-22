@@ -310,8 +310,8 @@ class Factorization {
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
         return result;
       }
+      // return BlockRightLooking<3>();
       return RightLooking(dummy);
-
   }
 
   struct MatrixData {
@@ -355,6 +355,17 @@ class Factorization {
       Int numColumnEntries = diagonal_block.leading_dim - local_j; // Number of nonzero entries on the diagonal of L and below
       VMap(diagonal_block.Pointer(local_j, local_j), numColumnEntries).setZero();
       m_inputData.injectEntries(j, factor_values_.Data(), diagonal_block(local_j, local_j));
+  }
+
+  template<Int BlockSize>
+  void InitializeFactorBlockColumn(Int j, Int local_j, BlasMatrixView<Field> &diagonal_block) {
+      // Zero out this block column
+      Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(diagonal_block.Pointer(0, local_j), diagonal_block.LeadingDimension() * BlockSize).setZero();
+      m_inputData.injectEntries(j, j + BlockSize, factor_values_.Data());
+      if (m_inputData.sigma != 0) {
+          for (Int c = 0; c < BlockSize; ++c)
+              diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
+      }
   }
 
   // Returns the number of rows in the last factored matrix.
@@ -592,9 +603,20 @@ private:
   SparseLDLResult<Field> BlockLeftLooking(); // matrix data is accessed via the ConversionPlan!
   SparseLDLResult<Field> LeftLooking(const CoordinateMatrix<Field>& matrix);
 
+  template<Int BlockSize>
+  SparseLDLResult<Field> BlockRightLooking(); // matrix data is accessed via the ConversionPlan!
   SparseLDLResult<Field> RightLooking(const CoordinateMatrix<Field>& matrix);
-  SparseLDLResult<Field> OpenMPRightLooking(
-      const CoordinateMatrix<Field>& matrix);
+  SparseLDLResult<Field> OpenMPRightLooking( const CoordinateMatrix<Field>& matrix);
+
+  template<Int BlockSize>
+  bool BlockRightLookingSubtree(
+      Int supernode,
+      const DynamicRegularizationParams<Field>& dynamic_reg_params,
+      const Buffer<double>& work_estimates, double min_parallel_work,
+      RightLookingSharedState<Field>* shared_state,
+      Buffer<PrivateState<Field>>* private_states,
+      SparseLDLResult<Field>* result,
+      SchurComplementStorage<Field> *subtreeStorage = nullptr);
 
   bool RightLookingSubtree(
       Int supernode, const CoordinateMatrix<Field>& matrix,
@@ -619,6 +641,13 @@ private:
                                   LeftLookingSharedState* shared_state,
                                   PrivateState<Field>* private_state);
 
+  template<Int BlockSize>
+  bool BlockRightLookingSupernodeFinalize(
+      Int supernode,
+      const DynamicRegularizationParams<Field>& dynamic_reg_params,
+      RightLookingSharedState<Field>* shared_state,
+      Buffer<PrivateState<Field>>* private_state,
+      SparseLDLResult<Field>* result);
   bool LeftLookingSupernodeFinalize(
       Int main_supernode,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
@@ -682,6 +711,7 @@ private:
 #include "catamari/sparse_ldl/supernodal/factorization/io-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/left_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/block_left_looking-impl.hpp"
+#include "catamari/sparse_ldl/supernodal/factorization/block_right_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/solve-impl.hpp"
