@@ -227,10 +227,9 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             // Diagonal block always exists...
             accumulateBlock<BlockSize>(child_column + cj, child_schur_complement.LeadingDimension(), // src
                                        factor_column + j, diagonal_block.LeadingDimension());        // dst
-            for (Int i = cj + BlockSize; i < child_degree; ++i) {
+            for (Int i = cj + BlockSize; i < child_degree; i += BlockSize) {
                 accumulateBlock<BlockSize>(child_column + i, child_schur_complement.LeadingDimension(), // src
                                            factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
-                factor_column[child_rel_indices[i]] += child_column[i];
             }
 
             child_j[ci] = cj + BlockSize;
@@ -238,10 +237,12 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     }
 
     const Int sc_size = schur_complement.width;
+    eigenMap(schur_complement).setZero();
     for (Int j = 0; j < sc_size; j += BlockSize) {
         Int front_j = j + supernode_size;
         Field *schur_column = schur_complement.Pointer(-supernode_size, j);
-        VMap(schur_complement.Pointer(0, j), sc_size).setZero();
+        // Zero-out block column
+        // VMap(schur_complement.Pointer(0, j), BlockSize * schur_complement.width).setZero();
 
         for (Int ci = 0; ci < num_children; ++ci) {
             Int cj = child_j[ci];
@@ -258,7 +259,6 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             for (Int i = cj; i < child_degree; i += BlockSize) {
                 accumulateBlock<BlockSize>(child_column + i,              child_schur_complement.LeadingDimension(), // src
                                            schur_column + child_rel_indices[i], schur_complement.LeadingDimension()); // dst
-                schur_column[child_rel_indices[i]] += child_column[i];
             }
 
             child_j[ci] = cj + BlockSize;
