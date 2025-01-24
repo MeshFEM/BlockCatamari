@@ -288,12 +288,14 @@ class Factorization {
 
   // Factors the given matrix after having previously factored another matrix
   // with the same sparsity pattern.
+  // (Legacy version that reads data from `matrix`!)
   SparseLDLResult<Field> RefactorWithFixedSparsityPattern(
       const CoordinateMatrix<Field>& matrix);
 
   // Factors the given matrix after having previously factored another matrix
   // with the same sparsity pattern -- the control structure is allowed to
   // change in minor ways.
+  // (currently disabled)
   SparseLDLResult<Field> RefactorWithFixedSparsityPattern(
       const CoordinateMatrix<Field>& matrix, const Control<Field>& control);
 
@@ -626,7 +628,6 @@ private:
 
   template<Int BlockSize>
   SparseLDLResult<Field> BlockRightLooking(); // matrix data is accessed via the ConversionPlan!
-  SparseLDLResult<Field> RightLooking(const CoordinateMatrix<Field>& matrix);
   SparseLDLResult<Field> OpenMPRightLooking( const CoordinateMatrix<Field>& matrix);
 
   template<Int BlockSize>
@@ -639,11 +640,6 @@ private:
       SparseLDLResult<Field>* result,
       SchurComplementStorage<Field> *subtreeStorage = nullptr);
 
-  bool RightLookingSubtree(
-      Int supernode, const CoordinateMatrix<Field>& matrix,
-      const DynamicRegularizationParams<Field>& dynamic_reg_params,
-      RightLookingSharedState<Field>* shared_state,
-      PrivateState<Field>* private_state, SparseLDLResult<Field>* result);
   bool OpenMPRightLookingSubtree(
       Int supernode, const CoordinateMatrix<Field>& matrix,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
@@ -674,12 +670,36 @@ private:
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
       SparseLDLResult<Field>* result);
 
+  bool OpenMPRightLookingSupernodeFinalize(
+      Int supernode,
+      const DynamicRegularizationParams<Field>& dynamic_reg_params,
+      RightLookingSharedState<Field>* shared_state,
+      Buffer<PrivateState<Field>>* private_state,
+      SparseLDLResult<Field>* result);
+
+  //////////////////////////////////////////////////////////////////////////////
+  // Legacy versions (for performance comparisons)
+  //////////////////////////////////////////////////////////////////////////////
+  SparseLDLResult<Field> RightLooking(const CoordinateMatrix<Field>& matrix);
+  SparseLDLResult<Field> OpenMPRightLookingLegacy( const CoordinateMatrix<Field>& matrix);
+  bool RightLookingSubtree( // Legacy
+      Int supernode, const CoordinateMatrix<Field>& matrix,
+      const DynamicRegularizationParams<Field>& dynamic_reg_params,
+      RightLookingSharedState<Field>* shared_state,
+      PrivateState<Field>* private_state, SparseLDLResult<Field>* result);
+  bool OpenMPRightLookingLegacySubtree( // Legacy
+      Int supernode, const CoordinateMatrix<Field>& matrix,
+      const DynamicRegularizationParams<Field>& dynamic_reg_params,
+      const Buffer<double>& work_estimates, double min_parallel_work,
+      RightLookingSharedState<Field>* shared_state,
+      Buffer<PrivateState<Field>>* private_states,
+      SparseLDLResult<Field>* result);
   bool RightLookingSupernodeFinalize(
       Int supernode,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
       RightLookingSharedState<Field>* shared_state,
       PrivateState<Field>* private_state, SparseLDLResult<Field>* result);
-  bool OpenMPRightLookingSupernodeFinalize(
+  bool OpenMPRightLookingLegacySupernodeFinalize(
       Int supernode,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
       RightLookingSharedState<Field>* shared_state,
@@ -733,6 +753,7 @@ private:
 #include "catamari/sparse_ldl/supernodal/factorization/left_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/block_left_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/block_right_looking-impl.hpp"
+#include "catamari/sparse_ldl/supernodal/factorization/right_looking_legacy_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/solve-impl.hpp"

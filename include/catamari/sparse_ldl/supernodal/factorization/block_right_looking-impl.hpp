@@ -162,7 +162,7 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
         FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
         FG_START_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
-        memset(schur_complement.Data(), 0, schur_complement.Height() * schur_complement.Width() * sizeof(Field));
+        std::fill(schur_complement.Data(), schur_complement.Data() + schur_complement.Height() * schur_complement.Width(), Field{0});
         for (Int j = num_child_diag_indices; j < child_degree; j += BlockSize) {
             Int dst_j = child_rel_indices[j] - supernode_size; // Parent block column *within the schur complement* into which the child block column is merging
 
@@ -257,7 +257,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     }
 
     const Int sc_size = schur_complement.width;
-    memset(schur_complement.Data(), 0, sc_size * sc_size * sizeof(Field));
+    std::fill(schur_complement.Data(), schur_complement.Data() + sc_size * sc_size, Field{0});
     for (Int j = 0; j < sc_size; j += BlockSize) {
         Int front_j = j + supernode_size;
         Field *schur_column = schur_complement.Pointer(-supernode_size, j);

@@ -397,7 +397,8 @@ SparseLDLResult<Field> Factorization<Field>::RefactorWithFixedSparsityPattern(
   if (control_.algorithm == kLeftLookingLDL) {
     result = LeftLooking(matrix);
   } else {
-    result = RightLooking(matrix);
+    // Legacy implementation that reads data from `matrix` rather than using the conversion plan!
+    result = OpenMPRightLookingLegacy(matrix);
   }
 
 #ifdef CATAMARI_ENABLE_TIMERS
@@ -410,40 +411,7 @@ SparseLDLResult<Field> Factorization<Field>::RefactorWithFixedSparsityPattern(
 template <class Field>
 SparseLDLResult<Field> Factorization<Field>::RefactorWithFixedSparsityPattern(
     const CoordinateMatrix<Field>& matrix, const Control<Field>& control) {
-  // TODO(Jack Poulson): Ensure that there were no fundamental changes to the
-  // control structure -- such as the algorithmic choice.
-  control_ = control;
-#ifdef CATAMARI_OPENMP
-  if (omp_get_max_threads() > 1) {
-    if (control_.algorithm == kAdaptiveLDL) {
-      control_.algorithm = kRightLookingLDL;
-    }
-  } else {
-    if (control_.algorithm == kAdaptiveLDL) {
-      control_.algorithm = kLeftLookingLDL;
-    }
-  }
-#else
-  if (control_.algorithm == kAdaptiveLDL) {
-      control_.algorithm = kLeftLookingLDL;
-  }
-#endif  // ifdef CATAMARI_OPENMP
-
-#ifdef CATAMARI_ENABLE_TIMERS
-  profile.Reset();
-#endif  // ifdef CATAMARI_ENABLE_TIMERS
-  SparseLDLResult<Field> result;
-  if (control_.algorithm == kLeftLookingLDL) {
-      result = LeftLooking(matrix);
-  } else {
-      result = RightLooking(matrix);
-  }
-
-#ifdef CATAMARI_ENABLE_TIMERS
-  std::cout << profile << std::endl;
-#endif  // ifdef CATAMARI_ENABLE_TIMERS
-
-  return result;
+    throw std::runtime_error("Disabled");
 }
 
 template <class Field>
