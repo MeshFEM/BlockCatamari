@@ -29,6 +29,15 @@ DiagonalFactor<Field>::DiagonalFactor(const Buffer<Int>& supernode_sizes, BlasMa
 
     num_diagonal_entries += supernode_size * supernode_size;
   }
+
+  if (storage.Data() == nullptr) {
+    // Legacy mode: allocate storage for the values
+    // and offset all the block pointers to point into this storage.
+    values_.Resize(num_diagonal_entries);
+    for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
+      blocks[supernode].data += (values_.Data() - (double *)nullptr);
+    }
+  }
 }
 
 }  // namespace supernodal_ldl

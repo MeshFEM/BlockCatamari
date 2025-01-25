@@ -180,7 +180,11 @@ void Factorization<Field>::InitializeFactors(
   CATAMARI_ASSERT(supernode_degrees.Size() == ordering_.supernode_sizes.Size(),
                   "Invalid supernode degrees size.");
 
-  m_allocateFactors(supernode_degrees);
+  if (control_.legacy) { // Original, noninterleaved diagonal/lower block storage
+    diagonal_factor_ = std::make_unique<DiagonalFactor<Field>>(ordering_.supernode_sizes                   );
+    lower_factor_    = std::make_unique<   LowerFactor<Field>>(ordering_.supernode_sizes, supernode_degrees);
+  }
+  else m_allocateFactors(supernode_degrees);
 
   // Store the largest degree of the factorization for use in the solve phase.
   max_degree_ =
@@ -275,6 +279,7 @@ void Factorization<Field>::InitialFactorizationSetup(
   CATAMARI_STOP_TIMER(profile.initialize_factors);
 }
 
+// Legacy!!!
 template <class Field>
 void Factorization<Field>::InitializeBlockColumn(
     Int supernode, const CoordinateMatrix<Field>& matrix) {
@@ -285,23 +290,22 @@ void Factorization<Field>::InitializeBlockColumn(
       control_.factorization_type != kLDLTransposeFactorization;
   const bool have_permutation = !ordering_.permutation.Empty();
   const Int supernode_start = ordering_.supernode_offsets[supernode];
-  const Int supernode_end   = ordering_.supernode_offsets[supernode + 1];
+  const Int supernode_size = ordering_.supernode_sizes[supernode];
   const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   const Int* index_beg = lower_factor_->StructureBeg(supernode);
   const Int* index_end = lower_factor_->StructureEnd(supernode);
-  assert(index_beg <= index_end);
-
-#if !LOAD_MATRIX_OUTSIDE
-  eigenMap(diagonal_block).setZero();
-  eigenMap(lower_block).setZero();
-#endif
-
-  for (Int j = supernode_start; j < supernode_end; ++j) {
+  for (Int j = supernode_start; j < supernode_start + supernode_size; ++j) {
     const Int j_rel = j - supernode_start;
     const Int j_orig = have_permutation ? ordering_.inverse_permutation[j] : j;
 
-    Field*  diag_column_ptr = diagonal_block.Pointer(0, j_rel);
-    Field* lower_column_ptr =    lower_block.Pointer(0, j_rel);
+    // Fill the diagonal block's column with zeros.
+    Field* diag_column_ptr = diagonal_block.Pointer(0, j_rel);
+    std::fill(diag_column_ptr, diag_column_ptr + supernode_size, Field{0});
+
+    // Fill the lower block's column with zeros.
+    Field* lower_column_ptr = lower_block.Pointer(0, j_rel);
+    std::fill(lower_column_ptr, lower_column_ptr + lower_block.height,
+              Field{0});
 
     // Insert the entries from the sparse matrix into this column.
     const Int row_beg = matrix.RowEntryOffset(j_orig);
@@ -314,7 +318,7 @@ void Factorization<Field>::InitializeBlockColumn(
         continue;
       }
       const Field value = self_adjoint ? Conjugate(entry.value) : entry.value;
-      if (row < supernode_end) {
+      if (row < supernode_start + supernode_size) {
         diag_column_ptr[row - supernode_start] = value;
       } else {
         const Int* iter = std::lower_bound(index_beg, index_end, row);
@@ -398,7 +402,12 @@ SparseLDLResult<Field> Factorization<Field>::RefactorWithFixedSparsityPattern(
     result = LeftLooking(matrix);
   } else {
     // Legacy implementation that reads data from `matrix` rather than using the conversion plan!
+    if (!control_.legacy) throw std::runtime_error("Called a legacy factorization routine with a non-legacy control setting!");
+#ifdef CATAMARI_OPENMP
     result = OpenMPRightLookingLegacy(matrix);
+#else
+    throw std::runtime_error("Legacy factorization code requires OpenMP support!");
+#endif
   }
 
 #ifdef CATAMARI_ENABLE_TIMERS

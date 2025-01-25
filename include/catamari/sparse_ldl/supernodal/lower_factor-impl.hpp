@@ -38,6 +38,15 @@ LowerFactor<Field>::LowerFactor(const Buffer<Int>& supernode_sizes,
     num_entries += degree * supernode_size;
   }
 
+  if (storage.Data() == nullptr) {
+    // Legacy mode: allocate storage for the values
+    // and offset all the block pointers to point into this storage.
+    values_.Resize(num_entries);
+    for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
+      blocks[supernode].data += (values_.Data() - (double *)nullptr);
+    }
+  }
+
   structure_index_offsets_[num_supernodes] = degree_sum;
   structure_indices_.Resize(degree_sum);
 }

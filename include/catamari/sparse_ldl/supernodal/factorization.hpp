@@ -130,6 +130,8 @@ struct Control {
   // generated.
   double min_parallel_threshold = 1e5;
 
+  bool legacy = false;
+
 #ifdef CATAMARI_ENABLE_TIMERS
   // The max number of levels of the supernodal tree to visualize timings of.
   Int max_timing_levels = 4;
@@ -451,6 +453,7 @@ class Factorization {
 
   // Initializes a supernodal block column of the factorization using the
   // input matrix.
+  // Legacy!
   void InitializeBlockColumn(Int supernode,
                              const CoordinateMatrix<Field>& matrix);
 #ifdef CATAMARI_OPENMP

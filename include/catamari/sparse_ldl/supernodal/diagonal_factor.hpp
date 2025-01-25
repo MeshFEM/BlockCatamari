@@ -25,6 +25,16 @@ class DiagonalFactor {
   Buffer<BlasMatrixView<Field>> blocks;
 
   DiagonalFactor(const Buffer<Int>& supernode_sizes, BlasMatrixView<Field> storage);
+
+  // Legacy constructor (noninterleaved lower/diagonal factor storage).
+  DiagonalFactor(const Buffer<Int>& supernode_sizes)
+      : DiagonalFactor(supernode_sizes, BlasMatrixView<Field>()) { }
+
+ private:
+  // The concatenation of the numerical values of the supernodal diagonal
+  // blocks (stored in a column-major manner in each block).
+  // Only used in legacy mode!
+  Buffer<Field> values_;
 };
 
 }  // namespace supernodal_ldl
@@ -32,4 +42,4 @@ class DiagonalFactor {
 
 #include "catamari/sparse_ldl/supernodal/diagonal_factor-impl.hpp"
 
-#endif  // ifndef CATAMARI_SPARSE_LDL_SUPERNODAL_DIAGONAL_FACTOR_H_
+#endif  //r ifndef CATAMARI_SPARSE_LDL_SUPERNODAL_DIAGONAL_FACTOR_H_

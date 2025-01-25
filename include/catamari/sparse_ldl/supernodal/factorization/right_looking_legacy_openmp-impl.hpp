@@ -215,6 +215,7 @@ bool Factorization<Field>::OpenMPRightLookingLegacySubtree(
 template <class Field>
 SparseLDLResult<Field> Factorization<Field>::OpenMPRightLookingLegacy(
     const CoordinateMatrix<Field>& matrix) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("OpenMPRightLookingLegacy");
   typedef ComplexBase<Field> Real;
 
   const Int num_supernodes = ordering_.supernode_sizes.Size();

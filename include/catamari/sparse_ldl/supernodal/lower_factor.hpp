@@ -29,6 +29,11 @@ class LowerFactor {
               const Buffer<Int>& supernode_degrees,
               BlasMatrixView<Field> storage);
 
+  // Legacy constructor (noninterleaved lower/diagonal factor storage).
+  LowerFactor(const Buffer<Int>& supernode_sizes,
+              const Buffer<Int>& supernode_degrees)
+      : LowerFactor(supernode_sizes, supernode_degrees, BlasMatrixView<Field>()) { }
+
   // Returns a pointer to the beginning of the structure of a supernode.
   Int* StructureBeg(Int supernode);
 
@@ -80,6 +85,12 @@ class LowerFactor {
   // number of supernodes that supernodes 0 through j - 1 individually intersect
   // with.
   Buffer<Int> intersect_size_offsets_;
+
+  // The concatenation of the numerical values of the supernodal structures.
+  // The entries of supernode j are stored between indices value_offsets[j] and
+  // value_offsets[j + 1] in a column-major manner.
+  // Only used in legacy mode!
+  Buffer<Field> values_;
 };
 
 }  // namespace supernodal_ldl
