@@ -13,7 +13,11 @@ set(BLA_VENDOR Intel10_64_dyn)
 endif()
 
 find_package(BLAS REQUIRED)
-find_package(OpenMP REQUIRED)
+
+option(CATAMARI_WITH_OPENMP "Enable OpenMP support" OFF)
+if (CATAMARI_WITH_OPENMP)
+    find_package(OpenMP REQUIRED)
+endif()
 
 if (NOT TARGET catamari)
     add_library(catamari INTERFACE)
@@ -21,15 +25,19 @@ if (NOT TARGET catamari)
     # M1-based Mac and x86-based Linux.
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         target_compile_definitions(catamari INTERFACE -DDARWIN -DARM -DCATAMARI_HAVE_FENV_DISABLE_DENORMS -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK -DQUOTIENT_USE_64BIT)
-        target_compile_definitions(catamari INTERFACE -DDARWIN -DARM -DCATAMARI_HAVE_FENV_DISABLE_DENORMS -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK -DQUOTIENT_USE_64BIT -DCATAMARI_OPENMP)
     elseif  (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
         target_compile_definitions(catamari INTERFACE -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DX86 -DLINUX -DCATAMARI_HAVE_XMMINTRIN -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DCATAMARI_HAVE_MKL -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK -DQUOTIENT_USE_64BIT)
         target_include_directories(catamari SYSTEM INTERFACE /usr/include/mkl) # Needed for Ubuntu MKL
     else()
         message(FATAL_ERROR "Unrecognized CMAKE_SYSTEM_NAME")
     endif()
+
+    if (CATAMARI_WITH_OPENMP)
+        target_compile_definitions(catamari INTERFACE -DCATAMARI_OPENMP)
+        target_link_libraries(catamari INTERFACE OpenMP::OpenMP_CXX)
+    endif()
+
     target_link_libraries(catamari INTERFACE BLAS::BLAS)
-    target_link_libraries(catamari INTERFACE OpenMP::OpenMP_CXX)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/quotient/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/mantis/include)
