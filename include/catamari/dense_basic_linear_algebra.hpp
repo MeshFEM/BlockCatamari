@@ -241,6 +241,13 @@ void RightUpperTriangularSolves(
     const ConstBlasMatrixView<Field>& triangular_matrix,
     BlasMatrixView<Field>* matrix);
 
+template <class Field>
+void TBBLowerNormalHermitianOuterProduct(
+    Int tile_size, const Field& alpha,
+    const ConstBlasMatrixView<Field>& left_matrix,
+    const ConstBlasMatrixView<Field>& right_matrix, const Field& beta,
+    BlasMatrixView<Field>* output_matrix);
+
 #ifdef CATAMARI_OPENMP
 // Performs a multi-threaded MatrixMultiplyLowerNormalNormal using OpenMP tasks.
 // In most circumstances, it should be surrounded by:

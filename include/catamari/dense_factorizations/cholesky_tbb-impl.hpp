@@ -27,7 +27,7 @@ struct CholeskyFlowgraph {
         : block_size(block_size_), matrix(matrix_)
     {
         Int height = matrix.height;
-        serial = force_serial || (height < 3 * tile_size) || (get_max_num_tbb_threads() < 2); // Also if running single threaded...
+        serial = force_serial || (height < 3 * tile_size) || (get_max_num_tbb_threads() < 2);
         if (serial) return;
 
         Int num_tiles = (height + tile_size - 1) / tile_size; // Number of tiles along width and height

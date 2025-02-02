@@ -55,7 +55,17 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         result->num_successful_pivots += num_supernode_pivots;
     } else {
         FG_START_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
-        num_supernode_pivots = CholeskyFlowgraph<Field>(diagonal_block, control_.block_size, control_.factor_tile_size).run();
+#if 1
+        if (diagonal_block.height > 3 * control_.factor_tile_size || (get_max_num_tbb_threads() < 2))
+            num_supernode_pivots = CholeskyFlowgraph<Field>(diagonal_block, control_.block_size, control_.factor_tile_size).run();
+        else
+            num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
+#else
+        num_supernode_pivots = FactorDiagonalBlock(
+                control_.block_size,
+                control_.factorization_type, dynamic_reg_params, &diagonal_block,
+                &result->dynamic_regularization);
+#endif
         FG_STOP_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
         result->num_successful_pivots += num_supernode_pivots;
     }
@@ -76,16 +86,44 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         const ConstBlasMatrixView<Int> permutation = SupernodePermutation(supernode);
         InversePermuteColumns(permutation, &lower_block);
     }
+    // TODO: implement entire `Finalize` routine as one big flowgraph that is very similar to `CholeskyFlowgraph`;
+    // just includes operates also on the lower_block and schur_complement parts of the frontal matrix.
 
     FG_START_TIMER(shared_state->finegrained_timers, supernode, SolveDiag);
+    Int tile_size = control_.factor_tile_size;
+#if 1
+    if (lower_block.height > 1.5 * tile_size) {
+        Int num_tiles = (lower_block.height + tile_size - 1) / tile_size;
+        tbb::parallel_for(tbb::blocked_range<Int>(0, num_tiles, 1), [&lower_block, &diagonal_block, tile_size](const tbb::blocked_range<Int> &r) {
+            for (Int i_tile = r.begin(); i_tile < r.end(); ++i_tile) {
+                Int i = i_tile * tile_size;
+                const Int tsize = std::min(lower_block.height - i, tile_size);
+                BlasMatrixView<Field> tile = lower_block.Submatrix(i, 0, tsize, lower_block.width);
+                RightLowerAdjointTriangularSolves(diagonal_block.ToConst(), &tile);
+            }
+        });
+    }
+    else
+        RightLowerAdjointTriangularSolves(diagonal_block.ToConst(), &lower_block);
+#else
     SolveAgainstDiagonalBlock(control_.factorization_type, diagonal_block.ToConst(), &lower_block);
+#endif
     FG_STOP_TIMER(shared_state->finegrained_timers, supernode, SolveDiag);
 
     if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
 
     FG_START_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
     BlasMatrixView<Field>& schur_complement = shared_state->schur_complements[supernode];
+
+#if 1
+    if (schur_complement.height > 1.5 * tile_size)
+        TBBLowerNormalHermitianOuterProduct(tile_size, Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
+    else
+        LowerNormalHermitianOuterProduct(Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
+#else
     LowerNormalHermitianOuterProduct( Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
+#endif
+
     FG_STOP_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
 
     return true;
