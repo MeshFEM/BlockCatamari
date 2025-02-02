@@ -47,6 +47,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     const bool has_children = ordering_.assembly_forest.child_offsets[supernode + 1] > ordering_.assembly_forest.child_offsets[supernode];
 
     Int num_supernode_pivots;
+    const bool single_thread = get_max_num_tbb_threads() < 2;
     if (control_.supernodal_pivoting) {
         BlasMatrixView<Int> permutation = SupernodePermutation(supernode);
         num_supernode_pivots = PivotedFactorDiagonalBlock(
@@ -56,10 +57,13 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     } else {
         FG_START_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
 #if 1
-        if (diagonal_block.height > 3 * control_.factor_tile_size || (get_max_num_tbb_threads() < 2))
-            num_supernode_pivots = CholeskyFlowgraph<Field>(diagonal_block, control_.block_size, control_.factor_tile_size).run();
-        else
+        if ((diagonal_block.height > 3 * control_.factor_tile_size) && !single_thread) {
+            auto &fg = shared_state->cholesky_flowgraphs[supernode];
+            if (!fg) fg = std::make_unique<CholeskyFlowgraph<Field>>(diagonal_block, control_.block_size, control_.factor_tile_size);
+            num_supernode_pivots = fg->run(diagonal_block);
+        } else {
             num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
+        }
 #else
         num_supernode_pivots = FactorDiagonalBlock(
                 control_.block_size,
@@ -92,7 +96,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     FG_START_TIMER(shared_state->finegrained_timers, supernode, SolveDiag);
     Int tile_size = control_.factor_tile_size;
 #if 1
-    if (lower_block.height > 1.5 * tile_size) {
+    if ((lower_block.height > 1.5 * tile_size) && !single_thread) {
         Int num_tiles = (lower_block.height + tile_size - 1) / tile_size;
         tbb::parallel_for(tbb::blocked_range<Int>(0, num_tiles, 1), [&lower_block, &diagonal_block, tile_size](const tbb::blocked_range<Int> &r) {
             for (Int i_tile = r.begin(); i_tile < r.end(); ++i_tile) {
@@ -116,7 +120,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     BlasMatrixView<Field>& schur_complement = shared_state->schur_complements[supernode];
 
 #if 1
-    if (schur_complement.height > 1.5 * tile_size)
+    if ((schur_complement.height > 1.5 * tile_size) && !single_thread)
         TBBLowerNormalHermitianOuterProduct(tile_size, Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
     else
         LowerNormalHermitianOuterProduct(Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
@@ -544,6 +548,10 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     if (shared_state.schur_complements.Size() != num_supernodes) {
         shared_state.schur_complements.Resize(num_supernodes);
         shared_state.schur_complement_storage.Resize(num_supernodes);
+    }
+    if (shared_state.cholesky_flowgraphs.size() != num_supernodes) {
+        shared_state.cholesky_flowgraphs.clear();
+        shared_state.cholesky_flowgraphs.resize(num_supernodes); // .assign(num_supernodes, nullptr) tries to copy a unique_ptr...
     }
 
 #if CATAMARI_FINEGRAINED_TIMERS

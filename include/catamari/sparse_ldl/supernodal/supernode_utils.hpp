@@ -11,6 +11,7 @@
 #include "catamari/buffer.hpp"
 #include "catamari/sparse_ldl/scalar.hpp"
 #include "catamari/symmetric_ordering.hpp"
+#include "catamari/dense_factorizations/cholesky_tbb-impl.hpp" // For CholeskyFlowgraph
 
 #include "catamari_config.hh"
 
@@ -161,6 +162,8 @@ struct RightLookingSharedState {
   void unsetFailed() { m_fail.store(false, std::memory_order_relaxed); }
   void   setFailed() { m_fail.store(true, std::memory_order_relaxed); }
   bool   hasFailed() const { return m_fail.load(std::memory_order_relaxed); }
+
+  std::vector<std::unique_ptr<CholeskyFlowgraph<Field>>> cholesky_flowgraphs;
 
 #ifdef CATAMARI_ENABLE_TIMERS
   Buffer<quotient::Timer> inclusive_timers, exclusive_timers; // Jack Poulson's original timers
