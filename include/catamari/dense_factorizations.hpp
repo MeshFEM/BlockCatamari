@@ -118,6 +118,7 @@ Int OpenMPPivotedLDLAdjointFactorization(Int tile_size, Int block_size,
 
 #include "catamari/dense_factorizations/cholesky-impl.hpp"
 #include "catamari/dense_factorizations/cholesky_openmp-impl.hpp"
+#include "catamari/dense_factorizations/cholesky_tbb-impl.hpp"
 #include "catamari/dense_factorizations/ldl_adjoint-impl.hpp"
 #include "catamari/dense_factorizations/ldl_adjoint_openmp-impl.hpp"
 #include "catamari/dense_factorizations/ldl_transpose-impl.hpp"

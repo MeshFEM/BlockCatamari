@@ -55,10 +55,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         result->num_successful_pivots += num_supernode_pivots;
     } else {
         FG_START_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
-        num_supernode_pivots = FactorDiagonalBlock(
-                control_.block_size,
-                control_.factorization_type, dynamic_reg_params, &diagonal_block,
-                &result->dynamic_regularization);
+        num_supernode_pivots = CholeskyFlowgraph<Field>(diagonal_block, control_.block_size, control_.factor_tile_size).run();
         FG_STOP_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
         result->num_successful_pivots += num_supernode_pivots;
     }
@@ -86,12 +83,10 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
 
     if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
 
-    if (control_.factorization_type == kCholeskyFactorization) {
-        FG_START_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
-        BlasMatrixView<Field>& schur_complement = shared_state->schur_complements[supernode];
-        LowerNormalHermitianOuterProduct( Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
-        FG_STOP_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
-    }
+    FG_START_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
+    BlasMatrixView<Field>& schur_complement = shared_state->schur_complements[supernode];
+    LowerNormalHermitianOuterProduct( Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
+    FG_STOP_TIMER(shared_state->finegrained_timers, supernode, OuterProduct);
 
     return true;
 }
@@ -295,6 +290,10 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         SparseLDLResult<Field>* result,
         SchurComplementStorage<Field> *subtreeStorage) {
 
+#if CATAMARI_FINEGRAINED_TIMERS
+    shared_state->finegrained_timers.assigned_thread[supernode] = tbb::this_task_arena::current_thread_index();
+#endif
+
     const Int child_beg = ordering_.assembly_forest.child_offsets[supernode];
     const Int child_end = ordering_.assembly_forest.child_offsets[supernode + 1];
     const Int num_children = child_end - child_beg;
@@ -406,7 +405,6 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
 
 #if 1
-            FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
             BlasMatrixView<Field> lower_block      = lower_factor_->blocks[supernode];
             BlasMatrixView<Field> diagonal_block   = diagonal_factor_->blocks[supernode];
             for (Int child_index = 0; child_index < num_children; ++child_index) {
@@ -415,7 +413,6 @@ bool Factorization<Field>::BlockRightLookingSubtree(
                         lower_factor_.get(), shared_state->schur_complements[child],
                         lower_block, diagonal_block, shared_state->schur_complements[supernode], *this, *shared_state, /* first_merge = */ child_index == 0);
             }
-            FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
 #else
             FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
             BlockMergeChildSchurComplements<BlockSize>(supernode, *this, shared_state->schur_complements);

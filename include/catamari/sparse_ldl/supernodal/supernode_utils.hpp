@@ -109,6 +109,7 @@ struct FineGrainedTimers {
   // Fine-grained timers accumulated per-supernode (threadsafe).
   enum Type { InitializeColumns = 0, /* Allocation,  Recurse, */ MergeSchur, MergeSchurInPara, Deallocation, OuterProduct, FactorDiag, SolveDiag, NumTimers };
   std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
+  Buffer<Int> assigned_thread;
 
   static std::string nameForType(Type type) {
     switch (type) {
@@ -130,6 +131,8 @@ struct FineGrainedTimers {
     for (auto &timer : finegrained_timers) {
       timer.Clear();
       timer.Resize(num_supernodes);
+      assigned_thread.Clear();
+      assigned_thread.Resize(num_supernodes);
     }
   }
 

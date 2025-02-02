@@ -527,6 +527,9 @@ class Factorization {
                   std::stringstream ss;
                   ss << "{ " << "\"size\": " << ordering_.supernode_sizes[supernode]
                              << ", \"deg\": " << lower_factor_->blocks[supernode].Height();
+#if CATAMARI_FINEGRAINED_TIMERS
+                  ss << ", \"thread\": " << shared_state_.finegrained_timers.assigned_thread[supernode];
+#endif
                   if (has_work_estimates) {
                     ss << ", \"work\": " << work_estimates_[supernode];
                     ss << ", \"parallel_mask\": [";

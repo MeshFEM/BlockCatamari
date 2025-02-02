@@ -331,7 +331,7 @@ Int LowerCholeskyFactorizationDynamicBLASDispatch(Int block_size, BlasMatrixView
 
 template <class Field>
 inline Int LowerCholeskyFactorization(Int block_size,
-                                      BlasMatrixView<float>* matrix) {
+                                      BlasMatrixView<Field>* matrix) {
   if (matrix->height < 2 * block_size)
       return UnblockedLowerCholeskyFactorization(matrix);
   return BlockedLowerCholeskyFactorization(block_size, matrix);
