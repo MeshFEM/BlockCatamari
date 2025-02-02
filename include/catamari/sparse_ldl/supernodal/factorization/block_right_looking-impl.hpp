@@ -199,7 +199,17 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
         FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
         FG_START_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
-        std::fill(schur_complement.Data(), schur_complement.Data() + schur_complement.Height() * schur_complement.Width(), Field{0});
+        {
+            const Int sc_size = schur_complement.width;
+            // Zero out only the lower triangle.
+            Field *column_start = schur_complement.data;
+            Field *column_end = column_start + schur_complement.height;
+            for (Int j = 0; j < sc_size; ++j) {
+                std::fill(column_start, column_end, Field{0});
+                column_start += schur_complement.height + 1;
+                column_end += schur_complement.height;
+            }
+        }
         for (Int j = num_child_diag_indices; j < child_degree; j += BlockSize) {
             Int dst_j = child_rel_indices[j] - supernode_size; // Parent block column *within the schur complement* into which the child block column is merging
 
@@ -242,8 +252,6 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
 template <Int BlockSize, class Field>
 void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
                                 const Buffer<BlasMatrixView<Field>> &schur_complements) {
-    using VMap = Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>;
-
     const auto &o = ldl.ordering_;
     const auto &af = o.assembly_forest;
     const Int child_beg = af.child_offsets[supernode];
@@ -294,7 +302,16 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     }
 
     const Int sc_size = schur_complement.width;
-    std::fill(schur_complement.Data(), schur_complement.Data() + sc_size * sc_size, Field{0});
+    {
+        // Zero out only the lower triangle.
+        Field *column_start = schur_complement.data;
+        Field *column_end = column_start + schur_complement.height;
+        for (Int j = 0; j < sc_size; ++j) {
+            std::fill(column_start, column_end, Field{0});
+            column_start += schur_complement.height + 1;
+            column_end += schur_complement.height;
+        }
+    }
     for (Int j = 0; j < sc_size; j += BlockSize) {
         Int front_j = j + supernode_size;
         Field *schur_column = schur_complement.Pointer(-supernode_size, j);
@@ -446,7 +463,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             allocate_schur_complement();
             // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
 
-#if 1
+#if 0
             BlasMatrixView<Field> lower_block      = lower_factor_->blocks[supernode];
             BlasMatrixView<Field> diagonal_block   = diagonal_factor_->blocks[supernode];
             for (Int child_index = 0; child_index < num_children; ++child_index) {

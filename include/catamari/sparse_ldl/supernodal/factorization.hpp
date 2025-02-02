@@ -365,7 +365,16 @@ class Factorization {
   template<Int BlockSize>
   void InitializeFactorBlockColumn(Int j, Int local_j, BlasMatrixView<Field> &diagonal_block) {
       // Zero out this block column
-      Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(diagonal_block.Pointer(0, local_j), diagonal_block.LeadingDimension() * BlockSize).setZero();
+      {
+          Field *column_start = diagonal_block.Pointer(local_j, local_j);
+          Field *column_end = (column_start - local_j) + diagonal_block.leading_dim;
+          for (size_t j = 0; j < BlockSize; ++j) {
+              std::fill(column_start, column_end, Field{0});
+              column_start += diagonal_block.leading_dim + 1;
+              column_end += diagonal_block.leading_dim;
+          }
+      }
+
       m_inputData.injectEntries(j, j + BlockSize, factor_values_.Data());
       if (m_inputData.sigma != 0) {
           for (Int c = 0; c < BlockSize; ++c)
@@ -374,8 +383,16 @@ class Factorization {
   }
 
   void InitializeFactorColumns(Int supernode_offset, Int jstart, Int jend, BlasMatrixView<Field> &diagonal_block) {
-      // Zero out this block column
-      Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(diagonal_block.Pointer(0, jstart), diagonal_block.LeadingDimension() * (jend - jstart)).setZero();
+      {
+          Field *column_start = diagonal_block.Pointer(jstart, jstart);
+          Field *column_end = (column_start - jstart) + diagonal_block.leading_dim;
+          for (size_t j = jstart; j < jend; ++j) {
+              std::fill(column_start, column_end, Field{0});
+              column_start += diagonal_block.leading_dim + 1;
+              column_end += diagonal_block.leading_dim;
+          }
+      }
+
       m_inputData.injectEntries(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
       if (m_inputData.sigma != 0) {
           for (Int c = jstart; c < jend; ++c)
@@ -385,7 +402,15 @@ class Factorization {
 
   void InitializeFactorSupernodeColumns(Int supernode_offset, Int supernode_size, BlasMatrixView<Field> &diagonal_block) {
       // Zero out this block column
-      Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(diagonal_block.Pointer(0, 0), diagonal_block.LeadingDimension() * supernode_size).setZero();
+      {
+          Field *column_start = diagonal_block.data;
+          Field *column_end = column_start + diagonal_block.leading_dim;
+          for (size_t j = 0; j < diagonal_block.width; ++j) {
+              std::fill(column_start, column_end, Field{0});
+              column_start += diagonal_block.leading_dim + 1;
+              column_end += diagonal_block.leading_dim;
+          }
+      }
       m_inputData.injectEntries(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
       if (m_inputData.sigma != 0) {
           for (Int c = 0; c < supernode_size; ++c)
