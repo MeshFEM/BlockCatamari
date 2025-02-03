@@ -695,6 +695,41 @@ void FillZeros(const SymmetricOrdering& ordering,
   }
 }
 
+// Zero out a lower-triangular matrix stored in unpacked column-major order
+// and with upper-left corner pointed to by `data`.
+// For performance reasons, we may end up zeroing out the entire array
+// (Surprisingly, this appears to be faster on Apple Silicon).
+template <class Field>
+void FillZerosLowerTriangular(Field *data, Int width, Int height) {
+#if !CATAMARI_FILLZERO_LOWER_TRI_ONLY
+    std::fill(data, data + width * height, Field{0});
+#else
+  Field *column_start = data;
+  Field *column_end = column_start + height;
+  for (Int j = 0; j < width; ++j) {
+      std::fill(column_start, column_end, Field{0});
+      column_start += height + 1;
+      column_end += height;
+  }
+#endif
+}
+
+// Same as above, but only write to columns in the range [jstart, jend)
+template <class Field>
+void FillZerosLowerTriangularMiddleCols(Field *data, Int jstart, Int jend, Int height) {
+#if !CATAMARI_FILLZERO_LOWER_TRI_ONLY
+    std::fill(data + jstart * height, data + jend * height, Field{0});
+#else
+  Field *column_start = data + jstart * height + jstart;
+  Field *column_end = data + jstart * height + height;
+  for (Int j = jstart; j < jend; ++j) {
+      std::fill(column_start, column_end, Field{0});
+      column_start += height + 1;
+      column_end += height;
+  }
+#endif
+}
+
 template <class Field>
 void FormScaledTranspose(SymmetricFactorizationType factorization_type,
                          const ConstBlasMatrixView<Field>& diagonal_block,

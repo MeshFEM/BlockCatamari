@@ -199,17 +199,7 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
         FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
         FG_START_TIMER(shared_state.finegrained_timers, supernode, MergeSchur);
-        {
-            const Int sc_size = schur_complement.width;
-            // Zero out only the lower triangle.
-            Field *column_start = schur_complement.data;
-            Field *column_end = column_start + schur_complement.height;
-            for (Int j = 0; j < sc_size; ++j) {
-                std::fill(column_start, column_end, Field{0});
-                column_start += schur_complement.height + 1;
-                column_end += schur_complement.height;
-            }
-        }
+        FillZerosLowerTriangular(schur_complement.data, schur_complement.width, schur_complement.height);
         for (Int j = num_child_diag_indices; j < child_degree; j += BlockSize) {
             Int dst_j = child_rel_indices[j] - supernode_size; // Parent block column *within the schur complement* into which the child block column is merging
 

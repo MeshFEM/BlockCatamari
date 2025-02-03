@@ -2,6 +2,7 @@
 #define CATAMARI_CONFIG_HH
 
 #define CATAMARI_FINEGRAINED_TIMERS 0
+#define CATAMARI_FILLZERO_LOWER_TRI_ONLY 1 // Seems much faster on x86; a bit slower on Apple Silicon
 // #define CATAMARI_ENABLE_TIMERS
 
 #if CATAMARI_FINEGRAINED_TIMERS

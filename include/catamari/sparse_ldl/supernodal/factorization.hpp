@@ -15,6 +15,7 @@
 #include "catamari/sparse_ldl/supernodal/supernode_utils.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/SchurComplementStorage.hpp"
 #include <tbb/task_group.h>
+#include <catamari/sparse_ldl/supernodal/supernode_utils-impl.hpp>
 #include <stdexcept>
 
 #ifdef CATAMARI_ENABLE_TIMERS
@@ -365,15 +366,7 @@ class Factorization {
   template<Int BlockSize>
   void InitializeFactorBlockColumn(Int j, Int local_j, BlasMatrixView<Field> &diagonal_block) {
       // Zero out this block column
-      {
-          Field *column_start = diagonal_block.Pointer(local_j, local_j);
-          Field *column_end = (column_start - local_j) + diagonal_block.leading_dim;
-          for (size_t j = 0; j < BlockSize; ++j) {
-              std::fill(column_start, column_end, Field{0});
-              column_start += diagonal_block.leading_dim + 1;
-              column_end += diagonal_block.leading_dim;
-          }
-      }
+      FillZerosLowerTriangularMiddleCols(diagonal_block.data, local_j, local_j + BlockSize, diagonal_block.leading_dim);
 
       m_inputData.injectEntries(j, j + BlockSize, factor_values_.Data());
       if (m_inputData.sigma != 0) {
@@ -383,15 +376,7 @@ class Factorization {
   }
 
   void InitializeFactorColumns(Int supernode_offset, Int jstart, Int jend, BlasMatrixView<Field> &diagonal_block) {
-      {
-          Field *column_start = diagonal_block.Pointer(jstart, jstart);
-          Field *column_end = (column_start - jstart) + diagonal_block.leading_dim;
-          for (size_t j = jstart; j < jend; ++j) {
-              std::fill(column_start, column_end, Field{0});
-              column_start += diagonal_block.leading_dim + 1;
-              column_end += diagonal_block.leading_dim;
-          }
-      }
+      FillZerosLowerTriangularMiddleCols(diagonal_block.data, jstart, jend, diagonal_block.leading_dim);
 
       m_inputData.injectEntries(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
       if (m_inputData.sigma != 0) {
@@ -401,16 +386,8 @@ class Factorization {
   }
 
   void InitializeFactorSupernodeColumns(Int supernode_offset, Int supernode_size, BlasMatrixView<Field> &diagonal_block) {
-      // Zero out this block column
-      {
-          Field *column_start = diagonal_block.data;
-          Field *column_end = column_start + diagonal_block.leading_dim;
-          for (size_t j = 0; j < diagonal_block.width; ++j) {
-              std::fill(column_start, column_end, Field{0});
-              column_start += diagonal_block.leading_dim + 1;
-              column_end += diagonal_block.leading_dim;
-          }
-      }
+      FillZerosLowerTriangular(diagonal_block.data, diagonal_block.width, diagonal_block.leading_dim);
+
       m_inputData.injectEntries(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
       if (m_inputData.sigma != 0) {
           for (Int c = 0; c < supernode_size; ++c)
