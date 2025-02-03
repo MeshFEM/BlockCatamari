@@ -207,14 +207,14 @@ inline MergableStatus MergableSupernode(
   // and parent supernode, we know how many rows of explicit zeros will be
   // introduced underneath the diagonal block of the child supernode via the
   // merger.
-  const Int num_new_zeros =
-      (parent_size + parent_degree - child_degree) * child_size;
+  const Int num_old_zeros = num_child_zeros + num_parent_zeros;
+  const Int num_new_zeros = (parent_size + parent_degree - child_degree) * child_size;
   if (num_new_zeros == 0) {
     status.mergable = true;
+    status.num_merged_zeros = num_old_zeros;
     return status;
   }
 
-  const Int num_old_zeros = num_child_zeros + num_parent_zeros;
   const Int num_zeros = num_new_zeros + num_old_zeros;
   status.num_merged_zeros = num_zeros;
 
