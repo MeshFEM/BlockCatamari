@@ -117,6 +117,7 @@ void OpenMPLowerNormalHermitianOuterProduct(
 
 template <class Field>
 void TBBLowerNormalHermitianOuterProduct(
+    tbb::task_group_context &ctx,
     Int tile_size, const ComplexBase<Field>& alpha,
     const ConstBlasMatrixView<Field>& left_matrix,
     const ComplexBase<Field>& beta, BlasMatrixView<Field>* output_matrix) {
@@ -127,7 +128,7 @@ void TBBLowerNormalHermitianOuterProduct(
   const Real beta_copy = beta;
   const ConstBlasMatrixView<Field> left_matrix_copy = left_matrix;
 
-  tbb::task_group tg;
+  tbb::task_group tg(ctx);
   for (Int j = 0; j < height; j += tile_size) {
     tg.run([tile_size, j, height, rank, &left_matrix_copy, &output_matrix, alpha_copy, beta_copy]()
         {

@@ -59,7 +59,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
 #if 1
         if ((diagonal_block.height > 3 * control_.factor_tile_size) && !single_thread) {
             auto &fg = shared_state->cholesky_flowgraphs[supernode];
-            if (!fg) fg = std::make_unique<CholeskyFlowgraph<Field>>(diagonal_block, control_.block_size, control_.factor_tile_size);
+            if (!fg) fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
             num_supernode_pivots = fg->run(diagonal_block);
         } else {
             num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
@@ -121,7 +121,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
 
 #if 1
     if ((schur_complement.height > 1.5 * tile_size) && !single_thread)
-        TBBLowerNormalHermitianOuterProduct(tile_size, Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
+        TBBLowerNormalHermitianOuterProduct(*(shared_state->tbb_ctx), tile_size, Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
     else
         LowerNormalHermitianOuterProduct(Real{-1}, lower_block.ToConst(), has_children ? Real{1} : Real{0}, &schur_complement);
 #else
@@ -379,7 +379,10 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         bool success = BlockRightLookingSubtree<BlockSize>(
                 child, subparams, work_estimates, min_parallel_work,
                 shared_state, private_states, resultContrib, stack);
-        if (!success) shared_state->setFailed();
+        if (!success) {
+            shared_state->setFailed();
+            shared_state->tbb_ctx->cancel_group_execution();
+        }
     };
 
     // Allocate this supernode's Schur complement either in an existing subtree
@@ -441,17 +444,15 @@ bool Factorization<Field>::BlockRightLookingSubtree(
     }
     else {
         // FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
-        tbb::task_group tg;
+        tbb::task_group tg(*(shared_state->tbb_ctx));
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);
         for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
             const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
             tg.run([&process_child, &result_contributions, child, child_index, shared_state, &tg]() {
                     process_child(child, &result_contributions[child_index], nullptr);
-                    if (shared_state->hasFailed()) tg.cancel();
-                    });
+            });
         }
         process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
-        if (shared_state->hasFailed()) tg.cancel();
         auto status = tg.wait();
         // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
 
@@ -597,6 +598,9 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     // const int old_max_threads = GetMaxBlasThreads();
     const bool parallel = (max_threads > 1) && (total_work >= min_parallel_work);
 
+    if (parallel && !shared_state.tbb_ctx)
+        shared_state.tbb_ctx = std::make_unique<tbb::task_group_context>();
+
     // Recurse on each tree in the elimination forest.
     if (!parallel || num_roots <= 1) {
         for (Int root_index = 0; root_index < num_roots; ++root_index) {
@@ -605,7 +609,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         }
     }
     else {
-        tbb::task_group tg;
+        tbb::task_group tg(*(shared_state.tbb_ctx));
         for (Int root_index = 0; root_index < num_roots - 1; ++root_index) {
             tg.run([&process_root, root_index]() { process_root(root_index); });
         }

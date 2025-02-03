@@ -23,8 +23,8 @@ struct CholeskyFlowgraph {
     using NodePtr = std::shared_ptr<Node>;
     using Real = ComplexBase<Field>;
 
-    CholeskyFlowgraph(const BlasMatrixView<double> &matrix_, Int tile_size, Int block_size_, bool force_serial = false)
-        : block_size(block_size_), matrix(matrix_)
+    CholeskyFlowgraph(tbb::task_group_context &ctx_, const BlasMatrixView<double> &matrix_, Int tile_size, Int block_size_, bool force_serial = false)
+        : block_size(block_size_), ctx(ctx_), matrix(matrix_), g(ctx)
     {
         Int height = matrix.height;
         serial = force_serial || (height < 3 * tile_size) || (get_max_num_tbb_threads() < 2);
@@ -47,8 +47,7 @@ struct CholeskyFlowgraph {
                 num_pivots += p; // Note: diagonal blocks are factorized sequentially due to dependencies, so this pivot count accumulation need not be atomic!
                 if (p < block_j_j.height) {
                     // Stop early on failed factorization
-                    tbb::task_group_context *ctx = tbb::task::current_context();
-                    if (ctx) ctx->cancel_group_execution();
+                    ctx.cancel_group_execution();
                 }
                 return msg;
             }));
@@ -145,6 +144,8 @@ struct CholeskyFlowgraph {
     bool serial = false;
     Int block_size;
     BlasMatrixView<Field> matrix;
+
+    tbb::task_group_context &ctx;
     tbb::flow::graph g;
     std::vector<NodePtr> nodes;
     Int num_pivots;

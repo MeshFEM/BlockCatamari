@@ -163,6 +163,7 @@ struct RightLookingSharedState {
   void   setFailed() { m_fail.store(true, std::memory_order_relaxed); }
   bool   hasFailed() const { return m_fail.load(std::memory_order_relaxed); }
 
+  std::unique_ptr<tbb::task_group_context> tbb_ctx;
   std::vector<std::unique_ptr<CholeskyFlowgraph<Field>>> cholesky_flowgraphs;
 
 #ifdef CATAMARI_ENABLE_TIMERS

@@ -315,7 +315,7 @@ class Factorization {
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
         return result;
       }
-      return BlockRightLooking<1>();
+      return BlockRightLooking<3>();
       // return RightLooking(dummy);
   }
 

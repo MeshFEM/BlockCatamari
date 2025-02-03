@@ -346,6 +346,8 @@ SparseLDLResult<Field> Factorization<Field>::Factor(
   work_estimates_.Clear();
   shared_state_.schur_complements.Clear();
   solve_shared_state_.schur_complements.Clear();
+  shared_state_.cholesky_flowgraphs.clear();
+  shared_state_.tbb_ctx.reset();
 
 #ifdef CATAMARI_ENABLE_TIMERS
   profile.Reset();
