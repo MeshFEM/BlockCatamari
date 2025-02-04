@@ -292,17 +292,8 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     }
 
     const Int sc_size = schur_complement.width;
-    {
-        // Zero out only the lower triangle.
-        Field *column_start = schur_complement.data;
-        Field *column_end = column_start + schur_complement.height;
-        for (Int j = 0; j < sc_size; ++j) {
-            std::fill(column_start, column_end, Field{0});
-            column_start += schur_complement.height + 1;
-            column_end += schur_complement.height;
-        }
-    }
     for (Int j = 0; j < sc_size; j += BlockSize) {
+        FillZerosLowerTriangularMiddleCols(schur_complement.data, j, j + BlockSize, schur_complement.height);
         Int front_j = j + supernode_size;
         Field *schur_column = schur_complement.Pointer(-supernode_size, j);
 
