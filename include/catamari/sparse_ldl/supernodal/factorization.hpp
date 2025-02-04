@@ -302,20 +302,25 @@ class Factorization {
   SparseLDLResult<Field> RefactorWithFixedSparsityPattern(
       const CoordinateMatrix<Field>& matrix, const Control<Field>& control);
 
-  SparseLDLResult<Field> RefactorWithFixedSparsityPattern(const ConversionPlan &cplan, const Field *Ax, Field sigma = 0, const Field *Bx = nullptr) {
+  SparseLDLResult<Field> RefactorWithFixedSparsityPattern(const ConversionPlan &cplan, Int blockSize, const Field *Ax, Field sigma = 0, const Field *Bx = nullptr) {
       CoordinateMatrix<Field> dummy;
       m_inputData.cplan = &cplan;
       m_inputData.Ax = Ax;
       m_inputData.Bx = Bx;
       m_inputData.sigma = sigma;
       if (control_.algorithm == kLeftLookingLDL) {
-          auto result = BlockLeftLooking<1>();
+          SparseLDLResult<Field> result;
+          if      (blockSize == 3) result = BlockLeftLooking<3>();
+          else if (blockSize == 2) result = BlockLeftLooking<2>();
+          else                     result = BlockLeftLooking<1>();
           // auto result = LeftLooking(dummy);
 #ifdef CATAMARI_ENABLE_TIMERS
           std::cout << profile << std::endl;
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
         return result;
       }
+      if (blockSize == 3) return BlockRightLooking<3>();
+      if (blockSize == 2) return BlockRightLooking<2>();
       return BlockRightLooking<1>();
       // return RightLooking(dummy);
   }
