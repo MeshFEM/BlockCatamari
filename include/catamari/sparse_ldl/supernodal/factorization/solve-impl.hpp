@@ -55,7 +55,7 @@ void Factorization<Field>::Solve(
     // Set up the shared state holding the "supernode rhs" arrays.
     // In order to allow the number of rhs to change without updating
     // the offsets, we use a "column major" storage  where all
-    // supdernodes' data for the first rhs column comes first, followed
+    // supernodes' data for the first rhs column comes first, followed
     // by the data for the second column (if any), and so on.
     const Int num_supernodes = ordering_.supernode_sizes.Size();
     RightLookingSharedState<Field> &shared_state = solve_shared_state_;

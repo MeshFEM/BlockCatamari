@@ -151,6 +151,15 @@ struct RightLookingSharedState {
   // actively in use.
   Buffer<BlasMatrixView<Field>> schur_complements;
 
+  // TODO: Parallelizing/pipelining MergeSchurComplements:
+  //    // We divide the frontal matrix into "panels"
+  //    // of width `control.frontal_panel_size`.
+  //    // When the child merges its Schur complement into the parent frontal matrix,
+  //    // it locks the panels it intersects one at a time, performing those panel updates.
+  //    tbb::spin_mutex schur_complement_allocation_mutex;
+  //    std::vector<char> frontal_panel_initialized; // avoid the packing of `std::vector<bool>`, which won't be properly guarded by the mutex!
+  //    std::vector<tbb::spin_mutex> frontal_panel_mutex;
+
   // The underlying buffers for the Schur complement portions of the fronts.
   // They are allocated and deallocated as the factorization progresses.
   // (Julian Panetta: We no longer use this during factorization;

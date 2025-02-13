@@ -52,6 +52,37 @@ inline void AssemblyForest::FillFromParents() {
   }
 }
 
+inline Int FillPostorderImpl(Int supernode, AssemblyForest &af, Int &back) {
+  const Int child_beg = af.child_offsets[supernode];
+  const Int child_end = af.child_offsets[supernode + 1];
+  Int first_descendent = back; // leaves' first descendents are themselves
+  for (Int child_index = child_beg; child_index < child_end; ++child_index) {
+    const Int child = af.children[child_index];
+    first_descendent = std::min(first_descendent, FillPostorderImpl(child, af, back));
+  }
+  af.postorder[back++] = supernode;
+  af.postorder_offset_for_subtree[supernode] = first_descendent;
+  return first_descendent;
+}
+
+inline void AssemblyForest::FillPostorder() {
+  if (children.Size() == 0) throw std::runtime_error("FillFromParents must be called first!");
+  const Int num_supernodes = parents.Size();
+
+  if (postorder.Size() != 0) {
+      if (postorder.Size() != num_supernodes) throw std::runtime_error("Incorrect postorder size");
+      return;
+  }
+
+  postorder.Resize(num_supernodes);
+  postorder_offset_for_subtree.Resize(num_supernodes);
+
+  Int back = 0;
+  for (const Int& root : roots) {
+    FillPostorderImpl(root, *this, back);
+  }
+}
+
 inline Int AssemblyForest::NumChildren(Int index) const {
   return child_offsets[index + 1] - child_offsets[index];
 }

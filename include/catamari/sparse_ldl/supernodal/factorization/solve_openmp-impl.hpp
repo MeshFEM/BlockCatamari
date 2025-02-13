@@ -49,44 +49,22 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
     InversePermute(permutation, &right_hand_sides_supernode);
   }
   if (is_cholesky) {
-    LeftLowerTriangularSolvesDynamicBLASDispatch(triangular_right_hand_sides,
-                                                 &right_hand_sides_supernode);
+    LeftLowerTriangularSolves(triangular_right_hand_sides,
+                             &right_hand_sides_supernode);
   } else {
     LeftLowerUnitTriangularSolves(triangular_right_hand_sides,
                                   &right_hand_sides_supernode);
   }
 
-  const ConstBlasMatrixView<Field> subdiagonal =
-      lower_factor_->blocks[supernode];
+  const ConstBlasMatrixView<Field> subdiagonal = lower_factor_->blocks[supernode];
   if (!subdiagonal.height) {
     return;
   }
 
   // Store the updates in the workspace.
-  if (true) {
-      MatrixMultiplyNormalNormal(Field{-1}, subdiagonal,
-                                 right_hand_sides_supernode.ToConst(), Field{1},
-                                 supernode_schur_complement);
-  }
-  else {
-#if 0
-    eigenMap(*supernode_schur_complement).noalias() -= eigenMap(subdiagonal) * eigenMap(right_hand_sides_supernode);
-#else
-    const Int output_height    = supernode_schur_complement->height;
-    const Int output_width     = supernode_schur_complement->width;
-    const Int contraction_size = subdiagonal.width;
-    for (Int j = 0; j < output_width; ++j) {
-        Field *out_col = supernode_schur_complement->Pointer(0, j);
-        const Field *right_col = right_hand_sides_supernode.Pointer(0, j);
-        for (Int i = 0; i < output_height; ++i) {
-            Field output_entry = out_col[i];
-            for (Int k = 0; k < contraction_size; ++k)
-                output_entry -= subdiagonal(i, k) * right_col[k];
-            out_col[i] = output_entry;
-        }
-    }
-#endif
-  }
+  MatrixMultiplyNormalNormal(Field{-1}, subdiagonal,
+                             right_hand_sides_supernode.ToConst(), Field{1},
+                             supernode_schur_complement);
 }
 
 template <class Field>
@@ -102,7 +80,7 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
       OpenMPLowerTriangularSolveRecursion(child, right_hand_sides, shared_state, level + 1);
   };
 
-  if ((child_end - child_beg) > 1 && (level < 8)) { // JP: avoid excessively fine-grained parallelism; TODO: use flop-based threshold
+  if ((child_end - child_beg) > 1 && (level < 4)) { // JP: avoid excessively fine-grained parallelism; TODO: use flop-based threshold
       tbb::task_group group;
       for (Int child_index = child_beg; child_index < child_end - 1; ++child_index) {
           group.run([&processChild, child_index]() { processChild(child_index); });
@@ -121,16 +99,16 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
   const Int* main_indices   = lower_factor_->StructureBeg(supernode);
 
   // Merge the child Schur complements into the parent.
-  const Int degree = lower_factor_->blocks[supernode].height;
   const Int num_rhs = right_hand_sides->width;
-
   BlasMatrixView<Field>& main_right_hand_sides = shared_state->schur_complements[supernode];
 
-  using  VecMap = Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>;
-  using CVecMap = Eigen::Map<const Eigen::Matrix<Field, Eigen::Dynamic, 1>>;
-  // eigenMap(main_right_hand_sides).setZero(); // <----- this doesn't account for the stride/height mismatch in main_right_hand_sides!!!!!
-  for (Int j = 0; j < num_rhs; ++j)
-    VecMap(main_right_hand_sides.Pointer(0, j), main_right_hand_sides.height).setZero();
+  {
+     Field *rhs_col = main_right_hand_sides.data;
+     for (Int j = 0; j < num_rhs; ++j) {
+       std::fill(rhs_col, rhs_col + main_right_hand_sides.height, Field{0});
+       rhs_col += main_right_hand_sides.leading_dim;
+     }
+  }
 
   for (Int child_index = child_beg; child_index < child_end; ++child_index) {
     const Int child = ordering_.assembly_forest.children[child_index];
@@ -146,12 +124,12 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     for (Int j = 0; j < num_rhs; ++j) {
         Field* crhs_col = child_right_hand_sides.Pointer(0, j);
         Field*  rhs_col = right_hand_sides->Pointer(0, j);
-        Field* mrhs_col = main_right_hand_sides.Pointer(0, j);
+        Field* mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
         for (Int i = 0; i < num_child_diag_indices; ++i)
             rhs_col[child_indices[i]] += crhs_col[i];
 
         for (Int i = num_child_diag_indices; i < child_degree; ++i)
-            mrhs_col[child_rel_indices[i] - supernode_size] += crhs_col[i];
+            mrhs_col[child_rel_indices[i]] += crhs_col[i];
     }
 #else
     for (Int j = 0; j < num_rhs; ++j) {
@@ -250,7 +228,7 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolveRecursion(
     const Int child_beg = ordering_.assembly_forest.child_offsets[supernode];
     const Int child_end = ordering_.assembly_forest.child_offsets[supernode + 1];
     const Int numChildren = child_end - child_beg;
-    if (numChildren <= 1 || level > 9) { // Avoid spawning unnecessary threads...
+    if (numChildren <= 1 || level > 5) { // Avoid excessive numbers of small tasks.
         for (Int child_index = child_beg; child_index < child_end; ++child_index)
             processChild(child_index);
         return;

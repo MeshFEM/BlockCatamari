@@ -73,8 +73,10 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         FG_STOP_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
         result->num_successful_pivots += num_supernode_pivots;
     }
-    if (num_supernode_pivots < supernode_size)
+    if (num_supernode_pivots < supernode_size) {
+        if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
         return false;
+    }
 
     IncorporateSupernodeIntoLDLResult(supernode_size, degree, result);
 
@@ -105,7 +107,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
                 BlasMatrixView<Field> tile = lower_block.Submatrix(i, 0, tsize, lower_block.width);
                 RightLowerAdjointTriangularSolves(diagonal_block.ToConst(), &tile);
             }
-        });
+        }, *(shared_state->tbb_ctx));
     }
     else
         RightLowerAdjointTriangularSolves(diagonal_block.ToConst(), &lower_block);
@@ -161,7 +163,6 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
         // Initialize each of the supernode's columns of the factor
         // and merge in the first child's Schur complement.
         {
-#if 1
             Int back_j = 0;
             for (Int cj = 0; cj < num_child_diag_indices; cj += BlockSize) {
                 Int dst_j = child_rel_indices[cj]; // Parent block column into which the child block column is merging
@@ -170,7 +171,6 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
 
                 const Field* child_column = child_schur_complement.Pointer(0, cj);
                 Field *     factor_column = diagonal_block.Pointer(0, dst_j);
-                // Diagonal block definitely exists
                 for (Int i = cj; i < child_degree; i += BlockSize) {
                     accumulateBlock<BlockSize>(child_column  + i, child_schur_complement.LeadingDimension(), // src
                                                factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
@@ -178,23 +178,6 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
                 back_j = jnext; // Advance to the next uninitialized parent column block.
             }
             if (back_j < supernode_size) ldl.InitializeFactorColumns(sno, back_j, supernode_size, diagonal_block); // Initialize remaining columns not intersected by the child
-#else
-        for (Int j = 0, cj = 0; j < supernode_size; j += BlockSize) {
-            Field* factor_column = diagonal_block.Pointer(0, j);
-            // ldl.InitializeFactorColumns(sno, j, j + BlockSize, diagonal_block); // Initialize up to the right edge of the destination block
-            ldl.template InitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
-
-            if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != j) continue;
-
-            const Field* child_column = child_schur_complement.Pointer(0, cj);
-            for (Int i = cj; i < child_degree; i += BlockSize) {
-                accumulateBlock<BlockSize>(child_column  + i, child_schur_complement.LeadingDimension(), // src
-                                           factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
-            }
-            cj += BlockSize;
-        }
-
-#endif
         }
         FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
@@ -341,17 +324,6 @@ bool Factorization<Field>::BlockRightLookingSubtree(
     const double work_estimate = work_estimates[supernode];
     const bool parallel = (work_estimate >= min_parallel_work) && (num_children > 1);
 
-    // Clear this supernode's factor columns and load matrix entries into them.
-    auto init = [&]() {
-        FG_START_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
-        BlasMatrixView<Field> diagonal_block = diagonal_factor_->blocks[supernode];
-        const Int sno = ordering_.supernode_offsets[supernode];
-        const Int supernode_size = ordering_.supernode_sizes[supernode];
-        for (Int j = 0; j < supernode_size; j += BlockSize)
-            InitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
-        FG_STOP_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
-    };
-
     auto process_child = [&, supernode, min_parallel_work, shared_state, private_states](Int child, SparseLDLResult<Field> *resultContrib, SchurComplementStorage<Field> *stack) {
         const Int child_offset = ordering_.supernode_offsets[child];
         DynamicRegularizationParams<Field> subparams = dynamic_reg_params;
@@ -362,7 +334,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
                 shared_state, private_states, resultContrib, stack);
         if (!success) {
             shared_state->setFailed();
-            shared_state->tbb_ctx->cancel_group_execution();
+            if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
         }
     };
 
@@ -393,7 +365,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
 
         if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
         if (num_children == 0)
-            init();
+            InitializeFactorSupernodeColumns(ordering_.supernode_offsets[supernode], lower_block.width, diagonal_block);
 
         allocate_schur_complement(); // TODO: move this after `process_child` if/when we implement an expand-in-place strategy
         for (Int child_index = 0; child_index < num_children; ++child_index) {
@@ -538,7 +510,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     // Allocate the map from child structures to parent fronts.
     auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
     auto &cri    = ordering_.assembly_forest.child_rel_indices;
-    if ( cri.Size() != num_supernodes) {
+    if (cri.Size() != num_supernodes) {
         cri.Resize(num_supernodes);
         ncdi.Resize(num_supernodes);
     }
@@ -579,6 +551,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     // const int old_max_threads = GetMaxBlasThreads();
     const bool parallel = (max_threads > 1) && (total_work >= min_parallel_work);
 
+    if (!parallel) shared_state.tbb_ctx.reset();
     if (parallel && !shared_state.tbb_ctx)
         shared_state.tbb_ctx = std::make_unique<tbb::task_group_context>();
 

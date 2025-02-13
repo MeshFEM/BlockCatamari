@@ -37,6 +37,11 @@ struct AssemblyForest {
   mutable Buffer<Buffer<Int>> child_rel_indices;
   mutable Buffer<Int> num_child_diag_indices;
 
+  // Julian Panetta: support for running left-looking factorization on just a subtree.
+  Buffer<Int> postorder, // postorder in which all nodes of a subtree are grouped consecutively
+              postorder_offset_for_subtree; // pointer to the first descendent within `postorder` of a given supernode
+  void FillPostorder();
+
   // Fills the children and root list from the parent list.
   void FillFromParents();
 
