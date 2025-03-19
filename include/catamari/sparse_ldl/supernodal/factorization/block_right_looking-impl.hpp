@@ -59,7 +59,10 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
 #if 1
         if ((diagonal_block.height > 3 * control_.factor_tile_size) && !single_thread) {
             auto &fg = shared_state->cholesky_flowgraphs[supernode];
-            if (!fg) fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
+            if (!fg) {
+                fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
+                fg->failureCallback = [shared_state]() { shared_state->setFailed(); };
+            }
             num_supernode_pivots = fg->run(diagonal_block);
         } else {
             num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
@@ -147,6 +150,7 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
                                     bool first_merge) {
     const Int child_degree = child_schur_complement.height;
     const Int sno = ordering.supernode_offsets[supernode];
+    assert(child_degree == lower_factor->blocks[child].height && "Incorrectly sized child schur complement. Perhaps child was not processed?");
     populateChildToParentMap(supernode, child, child_degree, ordering, lower_factor);
 
     // Number of child rows/cols that map to the parent's diagonal block.
@@ -240,6 +244,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     for (Int child_index = child_beg; child_index < child_end; ++child_index) {
         const Int child = af.children[child_index];
         const Int child_degree = schur_complements[child].height;
+        assert(child_degree == lower_factor->blocks[child].height && "Incorrectly sized child schur complement. Perhaps child was not processed?");
         populateChildToParentMap(supernode, child, child_degree, o, ldl.lower_factor_.get());
     }
 
@@ -264,7 +269,6 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             const Int child_degree = child_schur_complement.height;
             const Field* child_column = child_schur_complement.Pointer(0, cj);
 
-            // Diagonal block always exists...
             for (Int i = cj; i < child_degree; i += BlockSize) {
                 accumulateBlock<BlockSize>(child_column + i, child_schur_complement.LeadingDimension(), // src
                                            factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
@@ -401,12 +405,13 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);
         for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
             const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
-            tg.run([&process_child, &result_contributions, child, child_index, shared_state, &tg]() {
+            tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
                     process_child(child, &result_contributions[child_index], nullptr);
             });
         }
         process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
         auto status = tg.wait();
+
         // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
 
         if (status != tbb::task_group_status::complete)
@@ -551,9 +556,11 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     // const int old_max_threads = GetMaxBlasThreads();
     const bool parallel = (max_threads > 1) && (total_work >= min_parallel_work);
 
-    if (!parallel) shared_state.tbb_ctx.reset();
-    if (parallel && !shared_state.tbb_ctx)
-        shared_state.tbb_ctx = std::make_unique<tbb::task_group_context>();
+    if (parallel) {
+        if (shared_state.tbb_ctx) shared_state.tbb_ctx->reset();
+        else shared_state.tbb_ctx = std::make_unique<tbb::task_group_context>();
+    }
+    else shared_state.tbb_ctx.reset();
 
     // Recurse on each tree in the elimination forest.
     if (!parallel || num_roots <= 1) {

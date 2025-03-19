@@ -47,7 +47,8 @@ struct CholeskyFlowgraph {
                 num_pivots += p; // Note: diagonal blocks are factorized sequentially due to dependencies, so this pivot count accumulation need not be atomic!
                 if (p < block_j_j.height) {
                     // Stop early on failed factorization
-                    ctx.cancel_group_execution();
+                    // std::cout << "Dense Cholesky failed at pivot " << num_pivots << std::endl;
+                    m_cancelExecution();
                 }
                 return msg;
             }));
@@ -149,6 +150,18 @@ struct CholeskyFlowgraph {
     tbb::flow::graph g;
     std::vector<NodePtr> nodes;
     Int num_pivots;
+
+    // Failure notification sent in advance of cancelling all tasks in `ctx`.
+    // This is helpful, e.g., for ensuring a parent sparse Cholesky
+    // factorization is aware of the failure before its `task_group(ctx)`
+    // tasks stop running.
+    std::function<void()> failureCallback;
+
+private:
+    void m_cancelExecution() const {
+        if (failureCallback) failureCallback();
+        ctx.cancel_group_execution();
+    }
 };
 
 } // namespace catamari

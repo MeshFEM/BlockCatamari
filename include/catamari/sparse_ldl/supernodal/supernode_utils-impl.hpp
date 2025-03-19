@@ -912,7 +912,7 @@ void populateChildToParentMap(Int supernode, Int child, Int child_degree,
         } else {
             while (parent_indices[i_rel] != row) {
                 ++i_rel;
-                CATAMARI_ASSERT(i_rel < schur_complement.height, "Relative index is out-of-bounds.");
+                assert(i_rel < lower_factor->blocks[supernode].height && "Relative index is out-of-bounds.");
             }
             child_rel_indices[i] = supernode_size + i_rel; // index into the lower block of the front (diagonal and lower factor blocks are now unified/interleaved!)
         }
