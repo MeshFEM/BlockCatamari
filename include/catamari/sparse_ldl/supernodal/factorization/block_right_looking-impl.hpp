@@ -244,7 +244,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     for (Int child_index = child_beg; child_index < child_end; ++child_index) {
         const Int child = af.children[child_index];
         const Int child_degree = schur_complements[child].height;
-        assert(child_degree == lower_factor->blocks[child].height && "Incorrectly sized child schur complement. Perhaps child was not processed?");
+        assert(child_degree == ldl.lower_factor_->blocks[child].height && "Incorrectly sized child schur complement. Perhaps child was not processed?");
         populateChildToParentMap(supernode, child, child_degree, o, ldl.lower_factor_.get());
     }
 
