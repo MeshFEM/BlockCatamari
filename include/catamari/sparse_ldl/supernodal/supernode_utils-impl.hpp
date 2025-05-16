@@ -595,6 +595,125 @@ void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
 }
 
 template <class Field>
+void ParallelFillStructureIndicesRecursion(
+    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    const Buffer<Int>& supernode_member_to_index, Int root,
+    LowerFactor<Field>* lower_factor,
+    Buffer<Buffer<Int>>* private_pattern_flags) {
+  const Int child_beg = ordering.assembly_forest.child_offsets[root];
+  const Int child_end = ordering.assembly_forest.child_offsets[root + 1];
+  tbb::task_group tg;
+  for (Int child_index = child_beg; child_index < child_end; ++child_index) {
+    const Int child = ordering.assembly_forest.children[child_index];
+    tg.run([child, &matrix, &ordering, &supernode_member_to_index,
+            &lower_factor, &private_pattern_flags]() {
+      ParallelFillStructureIndicesRecursion(
+          matrix, ordering, supernode_member_to_index, child, lower_factor,
+          private_pattern_flags);
+    });
+  }
+  tg.wait();
+
+  const int thread = tbb::this_task_arena::current_thread_index();
+  Buffer<Int>& pattern_flags = (*private_pattern_flags)[thread];
+
+  // Form this node's structure by unioning that of its direct children
+  // (removing portions that intersect this supernode).
+  Int* struct_ptr = lower_factor->StructureBeg(root);
+  for (Int child_index = child_beg; child_index < child_end; ++child_index) {
+    const Int child = ordering.assembly_forest.children[child_index];
+    const Int* child_struct_beg = lower_factor->StructureBeg(child);
+    const Int* child_struct_end = lower_factor->StructureEnd(child);
+    for (const Int* child_struct_ptr = child_struct_beg;
+         child_struct_ptr != child_struct_end; ++child_struct_ptr) {
+      const Int row = *child_struct_ptr;
+      const Int row_supernode = supernode_member_to_index[row];
+      if (row_supernode == root) {
+        continue;
+      }
+
+      if (pattern_flags[row] != root) {
+        CATAMARI_ASSERT(row_supernode > root, "row supernode was < root.");
+        pattern_flags[row] = root;
+        *struct_ptr = row;
+        ++struct_ptr;
+      }
+    }
+  }
+
+  // Incorporate this supernode's structure.
+  const Int supernode_size = ordering.supernode_sizes[root];
+  const Int supernode_offset = ordering.supernode_offsets[root];
+  const bool have_permutation = !ordering.permutation.Empty();
+  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
+  for (Int column = supernode_offset;
+       column < supernode_offset + supernode_size; ++column) {
+    const Int orig_column =
+        have_permutation ? ordering.inverse_permutation[column] : column;
+    const Int column_beg = matrix.RowEntryOffset(orig_column);
+    const Int column_end = matrix.RowEntryOffset(orig_column + 1);
+    for (Int index = column_beg; index < column_end; ++index) {
+      const MatrixEntry<Field>& entry = entries[index];
+      const Int row =
+          have_permutation ? ordering.permutation[entry.column] : entry.column;
+      const Int row_supernode = supernode_member_to_index[row];
+      if (row_supernode <= root) {
+        continue;
+      }
+
+      if (pattern_flags[row] != root) {
+        pattern_flags[row] = root;
+        *struct_ptr = row;
+        ++struct_ptr;
+      }
+    }
+  }
+  CATAMARI_ASSERT(struct_ptr <= lower_factor->StructureEnd(root),
+                  "Stored too many indices.");
+  CATAMARI_ASSERT(struct_ptr >= lower_factor->StructureEnd(root),
+                  "Stored too few indices.");
+}
+
+template <class Field>
+void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
+                                  const SymmetricOrdering& ordering,
+                                  const Buffer<Int>& supernode_member_to_index,
+                                  LowerFactor<Field>* lower_factor,
+                                  int sort_grain_size = 500) {
+  const Int num_rows = matrix.NumRows();
+  const int max_threads = get_max_num_tbb_threads();
+
+  // A data structure for marking whether or not a node is in the pattern of
+  // the active row of the lower-triangular factor. Each thread potentially
+  // needs its own since different subtrees can have intersecting structure.
+  Buffer<Buffer<Int>> private_pattern_flags(max_threads);
+
+  for (int t = 0; t < max_threads; ++t)
+    private_pattern_flags[t].Resize(num_rows, -1);
+
+  tbb::task_group tg;
+  for (const Int root : ordering.assembly_forest.roots) {
+    #pragma omp task default(none) firstprivate(root)                     \
+        shared(matrix, ordering, supernode_member_to_index, lower_factor, \
+            private_pattern_flags)
+    tg.run([root, &matrix, &ordering, &supernode_member_to_index,
+            &lower_factor, &private_pattern_flags]() {
+      ParallelFillStructureIndicesRecursion(
+          matrix, ordering, supernode_member_to_index, root, lower_factor,
+          &private_pattern_flags);
+    });
+  }
+  tg.wait();
+
+  // Sort the structures.
+  const Int num_supernodes = ordering.supernode_sizes.Size();
+  parallel_for_range(num_supernodes, [&](size_t s) {
+    std::sort(lower_factor->StructureBeg(s),
+              lower_factor->StructureEnd(s));
+  }, sort_grain_size, 2 * sort_grain_size);
+}
+
+template <class Field>
 void FillSubtreeWorkEstimates(Int root, const AssemblyForest& supernode_forest,
                               const LowerFactor<Field>& lower_factor,
                               Buffer<double>* work_estimates) {

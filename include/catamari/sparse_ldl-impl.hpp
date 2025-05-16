@@ -40,6 +40,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
 
   ScopedEnableFlushToZero scope_guard;
 
+  BENCHMARK_START_TIMER_SECTION("quotient_graph");
+
 #ifdef CATAMARI_ENABLE_TIMERS
   quotient::Timer timer;
   timer.Start();
@@ -81,6 +83,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
         intensity >= control.supernodal_intensity_threshold;
   }
 
+  BENCHMARK_STOP_TIMER_SECTION("quotient_graph");
+
   // Optionally equilibrate the matrix.
   const CoordinateMatrix<Field>* matrix_to_factor;
   CoordinateMatrix<Field> equilibrated_matrix;
@@ -98,6 +102,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
   SparseLDLResult<Field> result;
   if (is_supernodal) {
     CATAMARI_START_TIMER(timer);
+
+    BENCHMARK_START_TIMER_SECTION("prepare_supernodes_and_assembly_forest");
 
     // TODO(Jack Poulson): Modify quotient to combine these into single routine.
     Buffer<Int> member_to_supernode;
@@ -119,6 +125,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
     quotient_graph.release();
+    BENCHMARK_STOP_TIMER_SECTION("prepare_supernodes_and_assembly_forest");
+
     supernodal_factorization.reset(new supernodal_ldl::Factorization<Field>);
     result = supernodal_factorization->Factor(*matrix_to_factor, ordering,
                                               control.supernodal_control,

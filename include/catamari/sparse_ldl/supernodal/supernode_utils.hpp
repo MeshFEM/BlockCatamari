@@ -321,6 +321,14 @@ void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
                           const SymmetricOrdering& ordering,
                           const Buffer<Int>& supernode_member_to_index,
                           LowerFactor<Field>* lower_factor);
+
+template <class Field>
+void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
+                                const SymmetricOrdering& ordering,
+                                const AssemblyForest& forest,
+                                const Buffer<Int>& degrees,
+                                LowerFactor<Field>* lower_factor,
+                                int sort_grain_size = 500);
 #ifdef CATAMARI_OPENMP
 template <class Field>
 void OpenMPFillStructureIndices(Int sort_grain_size,

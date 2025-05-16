@@ -68,6 +68,12 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
                                        const SymmetricOrdering& ordering,
                                        Buffer<Int>* parents,
                                        Buffer<Int>* degrees);
+
+template <class Field>
+void ParallelEliminationForestAndDegrees(
+    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    Buffer<Int>* parents, Buffer<Int>* degrees);
+
 #ifdef CATAMARI_OPENMP
 template <class Field>
 void OpenMPSimpleEliminationForestAndDegrees(
@@ -119,6 +125,7 @@ void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
                           const AssemblyForest& forest,
                           const Buffer<Int>& degrees,
                           LowerStructure* lower_structure);
+
 #ifdef CATAMARI_OPENMP
 template <class Field>
 void OpenMPFillStructureIndices(const CoordinateMatrix<Field>& matrix,

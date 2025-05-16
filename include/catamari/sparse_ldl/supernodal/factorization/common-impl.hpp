@@ -81,19 +81,30 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
     scalar_ldl::EliminationForestAndDegrees(reordered_matrix, &scalar_parents,
                                             &scalar_degrees);
   } else {
-    scalar_ldl::EliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
-                                            &scalar_degrees);
+    BENCHMARK_SCOPED_TIMER_SECTION t2("EliminationForestAndDegrees");
+
+    // Parallelize only if the specified ordering has the necessary information.
+    if (ordering_.supernode_sizes.Size() > 0) {
+      scalar_ldl::ParallelEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
+                                                &scalar_degrees);
+    } else {
+      scalar_ldl::SimpleEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
+                                              &scalar_degrees);
+    }
   }
   CATAMARI_STOP_TIMER(profile.scalar_elimination_forest);
 
   SymmetricOrdering fund_ordering;
-  fund_ordering.permutation = ordering_.permutation;
-  fund_ordering.inverse_permutation = ordering_.inverse_permutation;
-  FormFundamentalSupernodes(scalar_parents, scalar_degrees,
-                            &fund_ordering.supernode_sizes);
-  OffsetScan(fund_ordering.supernode_sizes, &fund_ordering.supernode_offsets);
-  CATAMARI_ASSERT(fund_ordering.supernode_offsets.Back() == matrix.NumRows(),
-                  "Supernodes did not sum to the matrix size.");
+  {
+      BENCHMARK_SCOPED_TIMER_SECTION t2("FormFundamentalSupernodes");
+      fund_ordering.permutation = ordering_.permutation;
+      fund_ordering.inverse_permutation = ordering_.inverse_permutation;
+      FormFundamentalSupernodes(scalar_parents, scalar_degrees,
+                                &fund_ordering.supernode_sizes);
+      OffsetScan(fund_ordering.supernode_sizes, &fund_ordering.supernode_offsets);
+      CATAMARI_ASSERT(fund_ordering.supernode_offsets.Back() == matrix.NumRows(),
+                      "Supernodes did not sum to the matrix size.");
+  }
 #ifdef CATAMARI_DEBUG
   if (!supernodal_ldl::ValidFundamentalSupernodes(
           matrix, ordering_, fund_ordering.supernode_sizes)) {
@@ -108,9 +119,12 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
 
   CATAMARI_START_TIMER(profile.supernodal_elimination_forest);
   const Int num_fund_supernodes = fund_ordering.supernode_sizes.Size();
-  ConvertFromScalarToSupernodalEliminationForest(
-      num_fund_supernodes, scalar_parents, fund_member_to_index,
-      &fund_ordering.assembly_forest.parents);
+  {
+      BENCHMARK_SCOPED_TIMER_SECTION t2("ConvertFromScalarToSupernodalEliminationForest");
+      ConvertFromScalarToSupernodalEliminationForest(
+          num_fund_supernodes, scalar_parents, fund_member_to_index,
+          &fund_ordering.assembly_forest.parents);
+  }
   CATAMARI_STOP_TIMER(profile.supernodal_elimination_forest);
 
   // Construct the supernodal degrees from the scalar degrees.
@@ -125,6 +139,7 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
   const SupernodalRelaxationControl& relax_control =
       control_.relaxation_control;
   if (relax_control.relax_supernodes) {
+    BENCHMARK_SCOPED_TIMER_SECTION t2("RelaxSupernodes");
     RelaxSupernodes(fund_ordering, fund_supernode_degrees, relax_control,
                     &ordering_, supernode_degrees, &supernode_member_to_index_);
   } else {
@@ -190,8 +205,11 @@ void Factorization<Field>::InitializeFactors(
   max_degree_ =
       *std::max_element(supernode_degrees.begin(), supernode_degrees.end());
 
-  FillStructureIndices(matrix, ordering_, supernode_member_to_index_,
-                       lower_factor_.get());
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION t2("ParallelFillStructureIndices");
+    ParallelFillStructureIndices(matrix, ordering_, supernode_member_to_index_,
+                         lower_factor_.get());
+  }
   if (control_.algorithm == kLeftLookingLDL) {
     lower_factor_->FillIntersectionSizes(ordering_.supernode_sizes,
                                          supernode_member_to_index_);
@@ -343,6 +361,8 @@ SparseLDLResult<Field> Factorization<Field>::Factor(
   ordering_ = manual_ordering;
 
   // Invalidate sparsity-pattern-dependent caches
+  // (Shouldn't actually be necessary since `SparseLDL::Factor`
+  //  constructs a new `Factorization` object every time)
   work_estimates_.Clear();
   shared_state_.schur_complements.Clear();
   shared_state_.schur_complement_storage.Clear();

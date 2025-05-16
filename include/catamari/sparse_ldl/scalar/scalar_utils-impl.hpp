@@ -66,6 +66,7 @@ template <class Field>
 void EliminationForest(const CoordinateMatrix<Field>& matrix,
                        const SymmetricOrdering& ordering, Buffer<Int>* parents,
                        Buffer<Int>* ancestors) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("EliminationForest");
   if (ordering.permutation.Empty()) {
     return EliminationForest(matrix, parents, ancestors);
   }
@@ -106,6 +107,207 @@ void EliminationForest(const CoordinateMatrix<Field>& matrix,
   EliminationForest(matrix, ordering, parents, &ancestors);
 }
 
+template <class Field>
+void ParallelEliminationForestAndDegreesRecursion(
+    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    Int root, bool keep_structures, Buffer<Int>* parents, Buffer<Int>* degrees,
+    Buffer<Buffer<std::vector<Int>>>* private_children_lists,
+    Buffer<Buffer<Int>>* structures, Buffer<Buffer<Int>>* private_pattern_flags,
+    Buffer<Buffer<Int>>* private_tmp_structures) {
+  const Int order_child_beg = ordering.assembly_forest.child_offsets[root];
+  const Int order_child_end = ordering.assembly_forest.child_offsets[root + 1];
+
+  tbb::task_group tg;
+  for (Int index = order_child_beg; index < order_child_end; ++index) {
+    const Int child = ordering.assembly_forest.children[index];
+
+    tg.run([keep_structures, child, &matrix, &ordering, parents, degrees,
+         &private_children_lists, &structures, &private_pattern_flags,
+         &private_tmp_structures]() {
+            ParallelEliminationForestAndDegreesRecursion(
+                matrix, ordering, child, keep_structures, parents, degrees,
+                private_children_lists, structures, private_pattern_flags,
+                private_tmp_structures);
+    });
+  }
+  tg.wait();
+
+  const int thread = tbb::this_task_arena::current_thread_index();
+  Buffer<std::vector<Int>>& children_list = (*private_children_lists)[thread];
+  Buffer<Int>& pattern_flags = (*private_pattern_flags)[thread];
+  Buffer<Int>& tmp_structure = (*private_tmp_structures)[thread];
+
+  const Int supernode_size = ordering.supernode_sizes[root];
+  const Int supernode_offset = ordering.supernode_offsets[root];
+  const bool have_permutation = !ordering.permutation.Empty();
+  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
+  for (Int column = supernode_offset;
+       column < supernode_offset + supernode_size; ++column) {
+    const Int orig_column =
+        have_permutation ? ordering.inverse_permutation[column] : column;
+    const Int column_beg = matrix.RowEntryOffset(orig_column);
+    const Int column_end = matrix.RowEntryOffset(orig_column + 1);
+
+    Buffer<Int>& structure = (*structures)[column];
+
+    // Merge all threads' children into this thread's list.
+    std::vector<Int>& children = children_list[column];
+    {
+      std::size_t num_total_children = 0;
+      for (std::size_t t = 0; t < private_children_lists->Size(); ++t) {
+        num_total_children += (*private_children_lists)[t][column].size();
+      }
+
+      const std::size_t num_local_children = children.size();
+      if (num_total_children > num_local_children) {
+        children.resize(num_total_children);
+        std::size_t offset = num_local_children;
+        for (std::size_t t = 0; t < private_children_lists->Size(); ++t) {
+          if (t == std::size_t(thread)) {
+            continue;
+          }
+          std::vector<Int>& other_children =
+              (*private_children_lists)[t][column];
+          std::copy(other_children.begin(), other_children.end(),
+                    children.begin() + offset);
+          offset += other_children.size();
+          other_children.clear();
+          other_children.shrink_to_fit();
+        }
+        CATAMARI_ASSERT(offset == num_total_children, "Invalid child offset");
+      }
+    }
+    const Int num_children = children.size();
+
+    Int degree = 0;
+    Int parent = -1;
+    if (num_children == 0) {
+      // Incorporate this column's structure.
+      for (Int index = column_beg; index < column_end; ++index) {
+        const MatrixEntry<Field>& entry = entries[index];
+        const Int row = have_permutation ? ordering.permutation[entry.column]
+                                         : entry.column;
+        if (row > column) {
+          if (!degree || row < parent) {
+            parent = row;
+          }
+          tmp_structure[degree++] = row;
+        }
+      }
+    } else {
+      // Form this node's structure by unioning that of its direct children
+      // (removing portions that intersect this column).
+      //
+      // We specially handle the first child to avoid unnecessary reads from
+      // 'pattern_flags'.
+      if (num_children >= 1) {
+        const Int child = children[0];
+        const Buffer<Int>& child_struct = (*structures)[child];
+        for (const Int& row : child_struct) {
+          if (row != column) {
+            CATAMARI_ASSERT(row > column, "row was < column (EFaDR).");
+            pattern_flags[row] = column;
+            if (!degree || row < parent) {
+              parent = row;
+            }
+            tmp_structure[degree++] = row;
+          }
+        }
+      }
+      for (Int child_index = 1; child_index < num_children; ++child_index) {
+        const Int child = children[child_index];
+        const Buffer<Int>& child_struct = (*structures)[child];
+        for (const Int& row : child_struct) {
+          if (row != column && pattern_flags[row] != column) {
+            CATAMARI_ASSERT(row > column, "row was < column (EFaDR).");
+            pattern_flags[row] = column;
+            if (!degree || row < parent) {
+              parent = row;
+            }
+            tmp_structure[degree++] = row;
+          }
+        }
+      }
+
+      // Incorporate this column's structure.
+      for (Int index = column_beg; index < column_end; ++index) {
+        const MatrixEntry<Field>& entry = entries[index];
+        const Int row = have_permutation ? ordering.permutation[entry.column]
+                                         : entry.column;
+        if (row > column && pattern_flags[row] != column) {
+          if (!degree || row < parent) {
+            parent = row;
+          }
+          tmp_structure[degree++] = row;
+        }
+      }
+    }
+    structure.Resize(degree);
+    std::copy(tmp_structure.begin(), tmp_structure.begin() + degree,
+              structure.begin());
+
+    (*parents)[column] = parent;
+    (*degrees)[column] = degree;
+    if (parent >= 0) {
+      children_list[parent].push_back(column);
+    }
+
+    // Free the resources of this subtree.
+    if (!keep_structures) {
+      for (const Int& child : children) {
+        (*structures)[child].Clear();
+      }
+    }
+    children.clear();
+    children.shrink_to_fit();
+  }
+}
+
+
+template <class Field>
+void ParallelEliminationForestAndDegrees(
+    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    Buffer<Int>* parents, Buffer<Int>* degrees) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("ParallelEliminationForestAndDegrees");
+  const Int num_rows = matrix.NumRows();
+  const int max_threads = get_max_num_tbb_threads();
+  parents->Resize(num_rows);
+  degrees->Resize(num_rows);
+
+  Buffer<Buffer<std::vector<Int>>> private_children_lists(max_threads);
+
+  // A data structure for marking whether or not a node is in the pattern of
+  // the active row of the lower-triangular factor. Each thread potentially
+  // needs its own since different subtrees can have intersecting structure.
+  Buffer<Buffer<Int>> private_pattern_flags(max_threads);
+
+  Buffer<Buffer<Int>> private_tmp_structures(max_threads);
+
+  for (int t = 0; t < max_threads; ++t) {
+      private_children_lists[t].Resize(num_rows);
+      private_pattern_flags[t].Resize(num_rows, -1);
+      private_tmp_structures[t].Resize(num_rows - 1);
+  }
+
+  const bool keep_structures = false;
+  Buffer<Buffer<Int>> structures(num_rows);
+
+  tbb::task_group tg;
+  for (const Int root : ordering.assembly_forest.roots) {
+    tg.run(
+        [keep_structures, root, &matrix, &ordering, &parents, &degrees,
+         &private_children_lists, &structures, &private_pattern_flags,
+         &private_tmp_structures]() {
+          ParallelEliminationForestAndDegreesRecursion(
+              matrix, ordering, root, keep_structures, parents, degrees,
+              &private_children_lists, &structures, &private_pattern_flags,
+              &private_tmp_structures);
+        });
+  }
+  tg.wait();
+}
+
+
 inline Int PostorderDepthFirstSearch(Int root, Int offset,
                                      const Buffer<Int>& child_lists,
                                      Buffer<Int>* child_list_heads,
@@ -128,6 +330,7 @@ inline Int PostorderDepthFirstSearch(Int root, Int offset,
 
 inline void PostorderFromEliminationForest(const Buffer<Int>& parents,
                                            Buffer<Int>* postorder) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("PostorderFromEliminationForest");
   const Int num_rows = parents.Size();
 
   // Construct the linked lists for the lists of children.
@@ -288,6 +491,7 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
                                   const Buffer<Int>& parents,
                                   const Buffer<Int>& postorder,
                                   Buffer<Int>* degrees) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("DegreesFromEliminationForest");
   const Int num_rows = matrix.NumRows();
   degrees->Resize(num_rows);
 

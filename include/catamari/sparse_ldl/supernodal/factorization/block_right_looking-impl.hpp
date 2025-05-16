@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 /*! @file
 //  Block-accelerated version of Jack Poulson's right-looking multifrontal code.
-//  This version also suses TBB instead of OpenMP for parallelism.
+//  This version also uses TBB instead of OpenMP for parallelism.
 //
 //  Author:  Julian Panetta (jpanetta), jpanetta@ucdavis.edu
 //  Company:  University of California, Davis
