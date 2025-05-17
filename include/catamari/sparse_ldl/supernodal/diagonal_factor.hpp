@@ -30,6 +30,8 @@ class DiagonalFactor {
   DiagonalFactor(const Buffer<Int>& supernode_sizes)
       : DiagonalFactor(supernode_sizes, BlasMatrixView<Field>()) { }
 
+  bool HasValues() const { return values_.Data() != nullptr; }
+
  private:
   // The concatenation of the numerical values of the supernodal diagonal
   // blocks (stored in a column-major manner in each block).

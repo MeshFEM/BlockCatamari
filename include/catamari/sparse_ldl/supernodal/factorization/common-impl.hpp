@@ -88,7 +88,7 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
       scalar_ldl::ParallelEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
                                                 &scalar_degrees);
     } else {
-      scalar_ldl::SimpleEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
+      scalar_ldl::EliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
                                               &scalar_degrees);
     }
   }
@@ -151,6 +151,7 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
     supernode_member_to_index_ = fund_member_to_index;
     *supernode_degrees = fund_supernode_degrees;
   }
+
   CATAMARI_STOP_TIMER(profile.relax_supernodes);
 }
 
@@ -375,27 +376,7 @@ SparseLDLResult<Field> Factorization<Field>::Factor(
   profile.Reset();
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
-#ifdef CATAMARI_OPENMP
-  // Parallelize only if the specified ordering has the necessary information.
-  if ((manual_ordering.supernode_sizes.Size() > 0) && omp_get_max_threads() > 1) {
-    if (control_.algorithm == kAdaptiveLDL) {
-      control_.algorithm = kRightLookingLDL;
-    }
-    #pragma omp parallel
-    #pragma omp single
-    OpenMPInitialFactorizationSetup(matrix);
-  } else {
-    if (control_.algorithm == kAdaptiveLDL) {
-      control_.algorithm = kLeftLookingLDL;
-    }
-    InitialFactorizationSetup(matrix);
-  }
-#else
-  if (control_.algorithm == kAdaptiveLDL) {
-    control_.algorithm = kLeftLookingLDL;
-  }
   InitialFactorizationSetup(matrix);
-#endif  // ifdef CATAMARI_OPENMP
 
   SparseLDLResult<Field> result;
   if (symbolic_only) return result;

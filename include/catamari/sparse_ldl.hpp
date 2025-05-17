@@ -132,7 +132,19 @@ class SparseLDL {
     if (!is_supernodal || !supernodal_factorization || scalar_factorization)
         throw std::runtime_error("Only supernodal factorizations support cloning");
     result->supernodal_factorization = supernodal_factorization->Clone();
-    result ->have_equilibration_     = have_equilibration_;
+    result->have_equilibration_      = have_equilibration_;
+    result->equilibration_           = equilibration_;
+
+    return result;
+  }
+
+  std::unique_ptr<SparseLDL> ExpandSymbolicFactorizationToScalar(Int block_size) const {
+    std::unique_ptr<SparseLDL> result = std::make_unique<SparseLDL>();
+    result->is_supernodal = is_supernodal;
+    if (!is_supernodal || !supernodal_factorization || scalar_factorization)
+        throw std::runtime_error("Only supernodal factorizations support cloning");
+    result->supernodal_factorization = supernodal_factorization->ExpandSymbolicFactorizationToScalar(block_size);
+    result->have_equilibration_      = have_equilibration_;
     result->equilibration_           = equilibration_;
 
     return result;

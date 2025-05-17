@@ -66,6 +66,8 @@ class LowerFactor {
   void FillIntersectionSizes(const Buffer<Int>& supernode_sizes,
                              const Buffer<Int>& supernode_member_to_index);
 
+  bool HasValues() const { return values_.Data() != nullptr; }
+
  private:
   // The concatenation of the structures of the supernodes. The structure of
   // supernode j is stored between indices index_offsets[j] and

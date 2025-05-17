@@ -496,6 +496,99 @@ class Factorization {
     return result;
   }
 
+  std::unique_ptr<Factorization> ExpandSymbolicFactorizationToScalar(Int block_size) const {
+      BENCHMARK_SCOPED_TIMER_SECTION timer("ExpandSymbolicFactorizationToScalar");
+
+      std::unique_ptr<Factorization> result = std::make_unique<Factorization>();
+      result->control_  = control_;
+      result->ordering_ = ordering_;
+
+      // "Upgrade" the supernode sizes to be multiples of the block size.
+      using VMap = Eigen::Map<Eigen::Matrix<Int, Eigen::Dynamic, 1>>;
+      VMap(result->ordering_.supernode_sizes  .Data(), result->ordering_.supernode_sizes  .Size()) *= block_size;
+      VMap(result->ordering_.supernode_offsets.Data(), result->ordering_.supernode_offsets.Size()) *= block_size;
+
+      // Upgrade the ordering permutation
+      {
+          // BENCHMARK_SCOPED_TIMER_SECTION timer2("UpgradePermutation");
+          auto upgrade_permutation = [block_size](Buffer<Int> &perm) {
+              size_t m = perm.Size();
+              std::decay_t<decltype(perm)> scalarPermutation(block_size * m);
+              for (size_t i = 0; i < m; ++i) {
+                  for (size_t j = 0; j < block_size; ++j)
+                      scalarPermutation[block_size * i + j] = perm[i] * block_size + j;
+              }
+              perm = std::move(scalarPermutation);
+          };
+
+          upgrade_permutation(result->ordering_.permutation);
+          upgrade_permutation(result->ordering_.inverse_permutation);
+      }
+
+      {
+          // BENCHMARK_SCOPED_TIMER_SECTION timer2("Expand supernode_member_to_index");
+          Buffer<Int> upgraded_supernode_member_to_index(supernode_member_to_index_.Size() * block_size);
+          for (Int i = 0; i < supernode_member_to_index_.Size(); ++i) {
+              const Int supernode = supernode_member_to_index_[i];
+              for (Int j = 0; j < block_size; ++j)
+                  upgraded_supernode_member_to_index[i * block_size + j] = supernode;
+          }
+          result->supernode_member_to_index_ = std::move(upgraded_supernode_member_to_index);
+      }
+
+      result->max_degree_ = max_degree_ * block_size;
+      result->max_lower_block_size_ = max_lower_block_size_ * (block_size * block_size);
+
+      const Int num_supernodes = ordering_.supernode_sizes.Size();
+      {
+          // BENCHMARK_SCOPED_TIMER_SECTION timer2("Allocate Factors");
+          Buffer<Int> supernode_degrees(num_supernodes);
+          for (Int s = 0; s < num_supernodes; ++s)
+              supernode_degrees[s] = block_size * lower_factor_->blocks[s].height;
+
+          result->m_allocateFactors(supernode_degrees);
+      }
+
+      {
+          // BENCHMARK_SCOPED_TIMER_SECTION timer2("Expand Lower Factor");
+          const auto &block_lf = *lower_factor_;
+          const auto &block_df = *diagonal_factor_;
+          auto      &scalar_lf = *result->lower_factor_;
+          auto      &scalar_df = *result->diagonal_factor_;
+
+          if (block_lf.HasValues() || block_df.HasValues())
+              throw std::runtime_error("Legacy mode does not support block factorization!");
+
+          // Expand the structure indices.
+          parallel_for_range(num_supernodes, [&](size_t s) {
+              size_t num_block_structure_indices = std::distance( block_lf.StructureBeg(s),  block_lf.StructureEnd(s));
+              size_t num_structure_indices       = std::distance(scalar_lf.StructureBeg(s), scalar_lf.StructureEnd(s));
+              if (block_size * num_block_structure_indices != num_structure_indices) { throw std::logic_error("Structure size mismatch"); }
+
+              Int *dst = scalar_lf.StructureBeg(s);
+              for (const Int *src = block_lf.StructureBeg(s); src != block_lf.StructureEnd(s); ++src) {
+                  Int block_row = *src;
+                  for (Int c = 0; c < block_size; ++c) {
+                      *dst++ = block_size * block_row + c;
+                  }
+              }
+          }, /* grain_size */ 64, /* parallelism_threshold */ 128);
+
+          // Left-looking-specific structures and workspace sizes
+          if (control_.algorithm == kLeftLookingLDL) {
+              result->left_looking_workspace_size_        = left_looking_workspace_size_        * (block_size * block_size);
+              result->left_looking_scaled_transpose_size_ = left_looking_scaled_transpose_size_ * (block_size * block_size);
+
+              // Note: we could upgrade this rather than recomputing it if
+              // we add appropriate accessor methods to `LowerFactor`.
+              scalar_lf.FillIntersectionSizes(result->ordering_.supernode_sizes,
+                                              result->supernode_member_to_index_);
+          }
+      }
+
+      return result;
+  }
+
   void WriteFinegrainedTimerStats(const std::string &directory, Int max_levels = std::numeric_limits<Int>::max()) const {
       shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
   }
@@ -611,6 +704,8 @@ private:
   // Performs the initial analysis (and factorization initialization) for a
   // particular sparsity pattern. Subsequent factorizations with the same
   // sparsity pattern can reuse the symbolic analysis.
+  // When `block_size != 1`, each nonzero in `matrix` represents a
+  // `block_size x block_size` nonzero block.
   void InitialFactorizationSetup(const CoordinateMatrix<Field>& matrix);
 #ifdef CATAMARI_OPENMP
   void OpenMPInitialFactorizationSetup(const CoordinateMatrix<Field>& matrix);
@@ -621,10 +716,6 @@ private:
   // Form the (possibly relaxed) supernodes for the factorization.
   void FormSupernodes(const CoordinateMatrix<Field>& matrix,
                       Buffer<Int>* supernode_degrees);
-#ifdef CATAMARI_OPENMP
-  void OpenMPFormSupernodes(const CoordinateMatrix<Field>& matrix,
-                            Buffer<Int>* supernode_degrees);
-#endif  // ifdef CATAMARI_OPENMP
 
 private:
   void InitializeFactors(const CoordinateMatrix<Field>& matrix,
