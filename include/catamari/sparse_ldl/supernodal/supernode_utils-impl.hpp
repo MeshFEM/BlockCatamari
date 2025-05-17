@@ -225,9 +225,27 @@ inline MergableStatus MergableSupernode(
       num_expanded_entries > num_zeros,
       "Number of expanded entries was <= the number of computed zeros.");
 
+  // Compute the scalar-factorization-equivalents of the sizes
+  // involved in the mergability criteria.
+  // Note that `combined_size` contains diagonal entries that correspond
+  // to only partial (lower triangular) blocks.
+  // In contrast, each of the `num_zeros` entries are below the diagonal
+  // and correspond to complete blocks.
+  const Int bs = control.block_size;
+  Int combined_size_scalar = combined_size;
+  Int num_zeros_scalar = num_zeros;
+  Int num_expanded_entries_scalar = num_expanded_entries;
+
+  if (bs > 1) {
+    combined_size_scalar = bs * combined_size;
+    num_expanded_entries_scalar = (combined_size_scalar * (combined_size_scalar + 1)) / 2
+                                + (bs * parent_degree) * combined_size_scalar;
+    num_zeros_scalar = (bs * bs) * num_zeros;
+  }
+
   for (const std::pair<Int, float>& cutoff : control.cutoff_pairs) {
-    const Int num_zeros_cutoff = num_expanded_entries * cutoff.second;
-    if (cutoff.first >= combined_size && num_zeros_cutoff >= num_zeros) {
+    const Int num_zeros_cutoff = num_expanded_entries_scalar * cutoff.second;
+    if (cutoff.first >= combined_size_scalar && num_zeros_cutoff >= num_zeros_scalar) {
       status.mergable = true;
       return status;
     }

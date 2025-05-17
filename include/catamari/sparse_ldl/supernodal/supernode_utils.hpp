@@ -42,6 +42,14 @@ struct SupernodalRelaxationControl {
       std::make_pair(48, 0.1f),
       std::make_pair(std::numeric_limits<Int>::max(), 0.05f),
   };
+
+  // The following setting is to ensure roughly comparable relaxation behavior
+  // when performing symbolic factorization on a "block sparse matrix"
+  // (where each entry represents a `block_size` x `block_size` dense block).
+  // The block size is used to adjust the nonzero counts computed in the
+  // `MergableSupernode`
+  Int block_size = 1;
+
 };
 
 namespace supernodal_ldl {
