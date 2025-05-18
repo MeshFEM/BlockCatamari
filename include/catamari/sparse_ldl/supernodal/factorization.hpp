@@ -28,9 +28,9 @@
 
 namespace catamari {
 
-// Sparse record of destination location and source entry for each input
-// matrix entry in the lower factor. This is stored in a
-// compressed-sparse-column-type format.
+// Sparse record for each (source) input matrix entry of its
+// destination in factor_values_.
+// This is stored in a compressed-sparse-column-type format.
 struct ConversionPlan {
     // Destination and source of each input matrix entry appearing in the factor.
     // Crucially does no value initialization, unlike std::pair!
@@ -657,11 +657,11 @@ class Factorization {
   // fill-reducing ordering and a supernodal relaxation permutation.
 public:
   SymmetricOrdering ordering_;
-private:
 
   // An array of length 'num_rows'; the i'th member is the index of the
   // supernode containing column 'i'.
   Buffer<Int> supernode_member_to_index_;
+private:
 
   // The largest degree of a supernode in the factorization.
   Int max_degree_;
