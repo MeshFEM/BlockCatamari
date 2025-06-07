@@ -30,7 +30,6 @@ template <class Field>
 void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     BlasMatrixView<Field>* supernode_schur_complement) const {
-  // Eliminate this supernode.
   const Int num_rhs = right_hand_sides->width;
   const bool is_cholesky =
       control_.factorization_type == kCholeskyFactorization;
@@ -120,16 +119,23 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     const Int &num_child_diag_indices    = ordering_.assembly_forest.num_child_diag_indices[child];
     const Buffer<Int> &child_rel_indices = ordering_.assembly_forest.child_rel_indices[child];
 
-#if 1
+#if 0
+    constexpr Int BLOCK_SIZE = 3;
     for (Int j = 0; j < num_rhs; ++j) {
-        Field* crhs_col = child_right_hand_sides.Pointer(0, j);
-        Field*  rhs_col = right_hand_sides->Pointer(0, j);
-        Field* mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
-        for (Int i = 0; i < num_child_diag_indices; ++i)
-            rhs_col[child_indices[i]] += crhs_col[i];
+        const Field* crhs_col = child_right_hand_sides.Pointer(0, j);
+        Field*        rhs_col = right_hand_sides->Pointer(0, j);
+        Field*       mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
+        using VecBlock  = VecN_T<Field, BLOCK_SIZE>;
 
-        for (Int i = num_child_diag_indices; i < child_degree; ++i)
-            mrhs_col[child_rel_indices[i]] += crhs_col[i];
+        for (Int i = 0; i < num_child_diag_indices; i += BLOCK_SIZE) {
+            Eigen::Map<VecBlock>(rhs_col + child_indices[i]) +=
+                Eigen::Map<const VecBlock>(crhs_col + i);
+        }
+
+        for (Int i = num_child_diag_indices; i < child_degree; i += BLOCK_SIZE) {
+            Eigen::Map<VecBlock>(mrhs_col + child_rel_indices[i]) +=
+                Eigen::Map<const VecBlock>(crhs_col + i);
+        }
     }
 #else
     for (Int j = 0; j < num_rhs; ++j) {

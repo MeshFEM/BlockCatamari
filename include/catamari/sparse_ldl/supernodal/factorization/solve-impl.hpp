@@ -41,7 +41,7 @@ void Factorization<Field>::Solve(
     if (permute_scratch_.Size() < size)
         permute_scratch_.Resize(size);
     permuted_right_hand_sides.data = permute_scratch_.Data();
-    Permute(ordering_.permutation, *right_hand_sides, &permuted_right_hand_sides);
+    InversePermute(ordering_.inverse_permutation, *right_hand_sides, &permuted_right_hand_sides);
 #else
     Permute(ordering_.permutation, right_hand_sides);
 #endif
@@ -129,7 +129,7 @@ void Factorization<Field>::Solve(
   if (needs_permutation) {
     BENCHMARK_SCOPED_TIMER_SECTION timer("IPermute");
 #if SOLVE_PERMUTE_SCRATCH
-    Permute(ordering_.inverse_permutation, permuted_right_hand_sides, right_hand_sides);
+    InversePermute(ordering_.permutation, permuted_right_hand_sides, right_hand_sides);
 #else
     Permute(ordering_.inverse_permutation, right_hand_sides);
 #endif
@@ -359,10 +359,15 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     if (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) {
       // Fill the work right_hand_sides.
       for (Int j = 0; j < num_rhs; ++j) {
-        Field *wrhs_ptr = work_right_hand_sides. Pointer(0, j);
-        Field * rhs_ptr =      right_hand_sides->Pointer(0, j);
-        for (Int i = 0; i < subdiagonal.height; ++i)
-          wrhs_ptr[i] = rhs_ptr[indices[i]];
+        const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
+              Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
+        constexpr Int BLOCK_SIZE = 3;
+        using VecBlock = VecN_T<Field, BLOCK_SIZE>;
+        for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
+          Eigen::Map<VecBlock> wrhs_block(wrhs_ptr);
+          wrhs_block = Eigen::Map<const VecBlock>(rhs_ptr + indices[i]);
+          wrhs_ptr += BLOCK_SIZE;
+        }
       }
 
       if (is_selfadjoint) {
@@ -380,9 +385,32 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
               Field * const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
 #if 1
         if (is_selfadjoint) {
-            constexpr Int CHUNK_SIZE = 6;
+            constexpr Int CHUNK_SIZE = 2;
             using Vec = VecN_T<Field, CHUNK_SIZE>;
             Int k;
+#if 0 // Block version
+            constexpr Int BLOCK_SIZE = 1;
+            using VecBlock = VecN_T<Field, BLOCK_SIZE>;
+            using Block = Eigen::Matrix<Field, BLOCK_SIZE, CHUNK_SIZE>;
+            using BMap = Eigen::Map<const Block, 0, Eigen::OuterStride<>>;
+            for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
+              Vec val = Vec::Zero();
+              for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
+                // for (int c = 0; c < BLOCK_SIZE; ++c)
+                //     assert(indices[i + c] == indices[i] + c);
+                val += BMap(subdiagonal.Pointer(i, k), BLOCK_SIZE, CHUNK_SIZE, Eigen::OuterStride<>(subdiagonal.leading_dim)).adjoint()
+                            * Eigen::Map<const VecBlock>(rhs_ptr + indices[i]);
+              }
+              Eigen::Map<Vec>(srhs_ptr + k) -= val;
+            }
+            for (; k < supernode_size; ++k) {
+              Field val = 0;
+              for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
+                val += Eigen::Map<const VecBlock>(subdiagonal.Pointer(i, k)).dot(Eigen::Map<const VecBlock>(rhs_ptr + indices[i]));
+              }
+              srhs_ptr[k] -= val;
+            }
+#else
             for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
               Vec val = rhs_ptr[indices[0]] * Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(0, k), Eigen::InnerStride<>(subdiagonal.leading_dim)).conjugate();
               const Field *subdiagonal_ptr = subdiagonal.Pointer(0, k);
@@ -399,6 +427,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
               }
               srhs_ptr[k] -= val;
             }
+#endif
         }
         else {
             constexpr Int CHUNK_SIZE = 6;
@@ -406,7 +435,6 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
             Int k;
             for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
               Vec val = rhs_ptr[indices[0]] * Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(0, k), Eigen::InnerStride<>(subdiagonal.leading_dim));
-              const Field *subdiagonal_ptr = subdiagonal.Pointer(0, k);
               for (Int i = 1; i < subdiagonal.height; ++i) {
                 Vec c = Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(i, k), Eigen::InnerStride<>(subdiagonal.leading_dim));
                 val += rhs_ptr[indices[i]] * c;

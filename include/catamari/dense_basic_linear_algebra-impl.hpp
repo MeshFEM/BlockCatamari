@@ -3317,6 +3317,21 @@ void Permute(const Perm &permutation, const BlasMatrixView<Field> &in, BlasMatri
     }
 }
 
+// Out-of-place inverse permutation
+// Perm can be, e.g., Buffer<Int>, ConstBlasMatrixView<Int>
+template <class Perm, class Field>
+void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatrixView<Field> *out) {
+    if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
+    for (Int j = 0; j < out->width; ++j) {
+        // Apply the permutation.
+        const Field *in_ptr = in.Pointer(0, j);
+        Field *out_ptr = out->Pointer(0, j);
+        parallel_for_range(out->height, [&](Int i) {
+            out_ptr[i] = in_ptr[iperm[i]];
+        }, 2048, 8192);
+    }
+}
+
 template <class Field>
 void PermuteColumns(const Buffer<Int>& permutation,
                     BlasMatrixView<Field>* matrix) {
