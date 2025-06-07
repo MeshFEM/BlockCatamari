@@ -119,8 +119,8 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     const Int &num_child_diag_indices    = ordering_.assembly_forest.num_child_diag_indices[child];
     const Buffer<Int> &child_rel_indices = ordering_.assembly_forest.child_rel_indices[child];
 
-#if 0
-    constexpr Int BLOCK_SIZE = 3;
+#if 1
+    constexpr Int BLOCK_SIZE = 1;
     for (Int j = 0; j < num_rhs; ++j) {
         const Field* crhs_col = child_right_hand_sides.Pointer(0, j);
         Field*        rhs_col = right_hand_sides->Pointer(0, j);

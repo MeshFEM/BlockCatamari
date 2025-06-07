@@ -361,7 +361,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
               Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
-        constexpr Int BLOCK_SIZE = 3;
+        constexpr Int BLOCK_SIZE = 1;
         using VecBlock = VecN_T<Field, BLOCK_SIZE>;
         for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
           Eigen::Map<VecBlock> wrhs_block(wrhs_ptr);
@@ -385,20 +385,28 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
               Field * const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
 #if 1
         if (is_selfadjoint) {
-            constexpr Int CHUNK_SIZE = 2;
+            constexpr Int CHUNK_SIZE = 6;
             using Vec = VecN_T<Field, CHUNK_SIZE>;
             Int k;
-#if 0 // Block version
+#if 1 // Block version
             constexpr Int BLOCK_SIZE = 1;
             using VecBlock = VecN_T<Field, BLOCK_SIZE>;
             using Block = Eigen::Matrix<Field, BLOCK_SIZE, CHUNK_SIZE>;
-            using BMap = Eigen::Map<const Block, 0, Eigen::OuterStride<>>;
+            // Eigen::Stride Gotcha: for single-row matrices, even in column
+            // major format, it is the **inner stride** that is used to
+            // determine the pointer increment between consecutive entries.
+            // However, with 2 or more rows, it is the outer stride, as one
+            // would expect.
+            // See also: https://gitlab.com/libeigen/eigen/-/issues/416#note_709598886
+            //           https://eigen.tuxfamily.org/bz/show_bug.cgi?id=416#c9
+            using Stride = std::conditional_t<BLOCK_SIZE == 1, Eigen::InnerStride<>, Eigen::OuterStride<>>;
+            using BMap = Eigen::Map<const Block, 0, Stride>;
             for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
               Vec val = Vec::Zero();
               for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
                 // for (int c = 0; c < BLOCK_SIZE; ++c)
                 //     assert(indices[i + c] == indices[i] + c);
-                val += BMap(subdiagonal.Pointer(i, k), BLOCK_SIZE, CHUNK_SIZE, Eigen::OuterStride<>(subdiagonal.leading_dim)).adjoint()
+                val += BMap(subdiagonal.Pointer(i, k), BLOCK_SIZE, CHUNK_SIZE, Stride(subdiagonal.leading_dim)).adjoint()
                             * Eigen::Map<const VecBlock>(rhs_ptr + indices[i]);
               }
               Eigen::Map<Vec>(srhs_ptr + k) -= val;
