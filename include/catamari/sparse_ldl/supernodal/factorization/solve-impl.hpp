@@ -47,6 +47,14 @@ void Factorization<Field>::Solve(
 #endif
   }
 
+  const Int num_supernodes = ordering_.supernode_sizes.Size();
+  SolveSharedState &shared_state = solve_shared_state_;
+#if CATAMARI_FINEGRAINED_TIMERS
+    if (shared_state.finegrained_timers.supernodeCount() != num_supernodes)
+        shared_state.finegrained_timers.allocate(num_supernodes);
+#endif  // ifdef CATAMARI_FINEGRAINED_TIMERS
+
+
   const Int max_threads = get_max_num_tbb_threads();
   if (max_threads > 1) {
     const int old_max_threads = GetMaxBlasThreads();
@@ -57,8 +65,6 @@ void Factorization<Field>::Solve(
     // the offsets, we use a "column major" storage  where all
     // supernodes' data for the first rhs column comes first, followed
     // by the data for the second column (if any), and so on.
-    const Int num_supernodes = ordering_.supernode_sizes.Size();
-    RightLookingSharedState<Field> &shared_state = solve_shared_state_;
 
     {
         // BENCHMARK_SCOPED_TIMER_SECTION timer("Allocate");
@@ -339,6 +345,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
 }
 
 template <class Field>
+template <size_t BLOCK_SIZE>
 void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     BlasMatrixView<Field> &work_right_hand_sides) const {
@@ -355,13 +362,14 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
   const ConstBlasMatrixView<Field> & subdiagonal =
       lower_factor_->blocks[supernode];
   if (subdiagonal.height) {
+
     // Handle the external updates for this supernode.
     if (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) {
+      FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
       // Fill the work right_hand_sides.
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
               Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
-        constexpr Int BLOCK_SIZE = 1;
         using VecBlock = VecN_T<Field, BLOCK_SIZE>;
         for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
           Eigen::Map<VecBlock> wrhs_block(wrhs_ptr);
@@ -379,7 +387,9 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
                                       work_right_hand_sides.ToConst(), Field{1},
                                       &right_hand_sides_supernode);
       }
+      FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
     } else {
+      FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr = right_hand_sides         ->Pointer(0, j);
               Field * const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
@@ -389,7 +399,6 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
             using Vec = VecN_T<Field, CHUNK_SIZE>;
             Int k;
 #if 1 // Block version
-            constexpr Int BLOCK_SIZE = 1;
             using VecBlock = VecN_T<Field, BLOCK_SIZE>;
             using Block = Eigen::Matrix<Field, BLOCK_SIZE, CHUNK_SIZE>;
             // Eigen::Stride Gotcha: for single-row matrices, even in column
@@ -471,14 +480,22 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
         }
 #endif
       }
+      FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
     }
   }
+
+  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
 
   // Solve against the diagonal block of this supernode.
   const ConstBlasMatrixView<Field> triangular_right_hand_sides =
       diagonal_factor_->blocks[supernode];
   if (control_.factorization_type == kCholeskyFactorization) {
-    LeftLowerAdjointTriangularSolvesDynamicBLASDispatch(triangular_right_hand_sides, &right_hand_sides_supernode);
+    if (right_hand_sides_supernode.width > 1) {
+        LeftLowerAdjointTriangularSolves(triangular_right_hand_sides, &right_hand_sides_supernode);
+    }
+    else {
+        TriangularSolveLeftLowerAdjoint(triangular_right_hand_sides, right_hand_sides_supernode.Data());
+    }
   } else if (control_.factorization_type == kLDLAdjointFactorization) {
     LeftLowerAdjointUnitTriangularSolves(triangular_right_hand_sides,
                                          &right_hand_sides_supernode);
@@ -491,6 +508,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
         SupernodePermutation(supernode);
     Permute(permutation, &right_hand_sides_supernode);
   }
+
+  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
 }
 
 template <class Field>

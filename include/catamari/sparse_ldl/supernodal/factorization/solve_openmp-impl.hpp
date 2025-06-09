@@ -41,6 +41,8 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
   BlasMatrixView<Field> right_hand_sides_supernode =
       right_hand_sides->Submatrix(supernode_start, 0, supernode_size, num_rhs);
 
+  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+
   // Solve against the diagonal block of the supernode.
   if (control_.supernodal_pivoting) {
     const ConstBlasMatrixView<Int> permutation =
@@ -48,12 +50,18 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
     InversePermute(permutation, &right_hand_sides_supernode);
   }
   if (is_cholesky) {
-    LeftLowerTriangularSolves(triangular_right_hand_sides,
-                             &right_hand_sides_supernode);
+    if (right_hand_sides_supernode.width > 1)
+        LeftLowerTriangularSolves(triangular_right_hand_sides,
+                                 &right_hand_sides_supernode);
+    else
+        TriangularSolveLeftLower(triangular_right_hand_sides,
+                                right_hand_sides_supernode.Data());
   } else {
     LeftLowerUnitTriangularSolves(triangular_right_hand_sides,
                                   &right_hand_sides_supernode);
   }
+
+  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
 
   const ConstBlasMatrixView<Field> subdiagonal = lower_factor_->blocks[supernode];
   if (!subdiagonal.height) {
@@ -61,22 +69,25 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
   }
 
   // Store the updates in the workspace.
+  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, MultiplySubdiagonal);
   MatrixMultiplyNormalNormal(Field{-1}, subdiagonal,
                              right_hand_sides_supernode.ToConst(), Field{1},
                              supernode_schur_complement);
+  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, MultiplySubdiagonal);
 }
 
 template <class Field>
+template<size_t BLOCK_SIZE>
 void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
-    RightLookingSharedState<Field>* shared_state, int level) const {
+    SolveSharedState* shared_state, int level) const {
   // Recurse on this supernode's children.
   const Int child_beg = ordering_.assembly_forest.child_offsets[supernode];
   const Int child_end = ordering_.assembly_forest.child_offsets[supernode + 1];
 
   auto processChild = [&, shared_state, right_hand_sides, level](Int child_index) {
       const Int child = ordering_.assembly_forest.children[child_index];
-      OpenMPLowerTriangularSolveRecursion(child, right_hand_sides, shared_state, level + 1);
+      OpenMPLowerTriangularSolveRecursion<BLOCK_SIZE>(child, right_hand_sides, shared_state, level + 1);
   };
 
   if ((child_end - child_beg) > 1 && (level < 4)) { // JP: avoid excessively fine-grained parallelism; TODO: use flop-based threshold
@@ -96,6 +107,8 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
   const Int supernode_start = ordering_.supernode_offsets[supernode];
   const Int supernode_size  = ordering_.supernode_sizes[supernode];
   const Int* main_indices   = lower_factor_->StructureBeg(supernode);
+
+  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, MergeChildContributions);
 
   // Merge the child Schur complements into the parent.
   const Int num_rhs = right_hand_sides->width;
@@ -120,7 +133,6 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     const Buffer<Int> &child_rel_indices = ordering_.assembly_forest.child_rel_indices[child];
 
 #if 1
-    constexpr Int BLOCK_SIZE = 1;
     for (Int j = 0; j < num_rhs; ++j) {
         const Field* crhs_col = child_right_hand_sides.Pointer(0, j);
         Field*        rhs_col = right_hand_sides->Pointer(0, j);
@@ -152,32 +164,37 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
 #endif
   }
 
+  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, MergeChildContributions);
+
   // Perform this supernode's trapezoidal solve.
-  OpenMPLowerSupernodalTrapezoidalSolve(supernode, right_hand_sides,
-                                        &main_right_hand_sides);
+  OpenMPLowerSupernodalTrapezoidalSolve(supernode, right_hand_sides, &main_right_hand_sides);
 }
 
 template <class Field>
 void Factorization<Field>::OpenMPLowerTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides,
-    RightLookingSharedState<Field>* shared_state) const {
+    SolveSharedState* shared_state) const {
   BENCHMARK_SCOPED_TIMER_SECTION timer("OpenMPLowerTriangularSolve");
 
   // Allocate the map from child structures to parent fronts (in case it wasn't populated during the factorization (e.g., for left-looking))
   const Int num_supernodes = ordering_.supernode_sizes.Size();
   auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
   auto &cri    = ordering_.assembly_forest.child_rel_indices;
-  if ( cri.Size() != num_supernodes) {
+  if (cri.Size() != num_supernodes) {
       cri.Resize(num_supernodes);
       ncdi.Resize(num_supernodes);
   }
 
   // Recurse on each tree in the elimination forest.
   const Int num_roots = ordering_.assembly_forest.roots.Size();
-  for (Int root_index = 0; root_index < num_roots; ++root_index) {
-    const Int root = ordering_.assembly_forest.roots[root_index];
-    OpenMPLowerTriangularSolveRecursion(root, right_hand_sides, shared_state, 0);
+  tbb::task_group tg;
+  for (Int root_index = 0; root_index < num_roots - 1; ++root_index) {
+      tg.run([right_hand_sides, shared_state, root_index, &tg, this]() {
+         OpenMPLowerTriangularSolveRecursion(ordering_.assembly_forest.roots[root_index], right_hand_sides, shared_state, 0);
+      });
   }
+  OpenMPLowerTriangularSolveRecursion(ordering_.assembly_forest.roots[num_roots - 1], right_hand_sides, shared_state, 0);
+  tg.wait();
 }
 
 template <class Field>
@@ -218,11 +235,8 @@ void Factorization<Field>::OpenMPDiagonalSolve(
 template <class Field>
 void Factorization<Field>::OpenMPLowerTransposeTriangularSolveRecursion(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
-    RightLookingSharedState<Field>* shared_state, int level, tbb::task_group &tg) const {
+    SolveSharedState* shared_state, int level, tbb::task_group &tg) const {
     // Perform this supernode's trapezoidal solve.
-    // TODO(Jack Poulson): Add OpenMP support into the trapezoidal solve.
-
-    // Do the work for this supernode.
     LowerTransposeSupernodalTrapezoidalSolve(supernode, right_hand_sides, shared_state->schur_complements[supernode]);
 
     auto processChild = [right_hand_sides, shared_state, level, &tg, this](Int child_index) {
@@ -248,7 +262,7 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolveRecursion(
 template <class Field>
 void Factorization<Field>::OpenMPLowerTransposeTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides,
-    RightLookingSharedState<Field>* shared_state) const {
+    SolveSharedState* shared_state) const {
     BENCHMARK_SCOPED_TIMER_SECTION timer("OpenMPLowerTransposeTriangularSolve");
 
     const Int num_roots = ordering_.assembly_forest.roots.Size();

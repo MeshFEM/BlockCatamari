@@ -3319,16 +3319,31 @@ void Permute(const Perm &permutation, const BlasMatrixView<Field> &in, BlasMatri
 
 // Out-of-place inverse permutation
 // Perm can be, e.g., Buffer<Int>, ConstBlasMatrixView<Int>
-template <class Perm, class Field>
+template <size_t BLOCK_SIZE = 1, class Perm, class Field>
 void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatrixView<Field> *out) {
+    BENCHMARK_SCOPED_TIMER_SECTION timer("InversePermute");
     if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
     for (Int j = 0; j < out->width; ++j) {
         // Apply the permutation.
         const Field *in_ptr = in.Pointer(0, j);
         Field *out_ptr = out->Pointer(0, j);
-        parallel_for_range(out->height, [&](Int i) {
-            out_ptr[i] = in_ptr[iperm[i]];
-        }, 2048, 8192);
+        if (out->height % BLOCK_SIZE != 0) { throw std::runtime_error("InversePermute: height must be a multiple of BLOCK_SIZE"); }
+
+        size_t blockHeight = out->height / BLOCK_SIZE;
+
+        auto permute_range = [out_ptr, in_ptr, &iperm](const tbb::blocked_range<size_t> &r) {
+            const size_t end = r.end() * BLOCK_SIZE;
+            Field *dst = out_ptr + r.begin() * BLOCK_SIZE;
+            for (size_t i = BLOCK_SIZE * r.begin(); i < end; i += BLOCK_SIZE) {
+                const Field *src = in_ptr + iperm[i];
+                for (size_t c = 0; c < BLOCK_SIZE; ++c)
+                    *(dst++) = *(src++);
+           }
+        };
+
+        if (blockHeight > 4096) {
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, blockHeight, 2048), permute_range);
+        } else permute_range(tbb::blocked_range<size_t>(0, blockHeight));
     }
 }
 

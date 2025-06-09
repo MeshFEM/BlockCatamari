@@ -283,6 +283,7 @@ class Factorization {
 #ifdef CATAMARI_ENABLE_TIMERS
   FactorizationProfile profile;
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
+  using SolveSharedState = RightLookingSharedState<Field, FineGrainedTimersSolve>;
 
   // Factors the given matrix using the prescribed permutation.
   SparseLDLResult<Field> Factor(const CoordinateMatrix<Field>& matrix,
@@ -411,7 +412,7 @@ class Factorization {
 
   void OpenMPLowerTriangularSolve(
       BlasMatrixView<Field>* right_hand_sides,
-      RightLookingSharedState<Field>* shared_state) const;
+      SolveSharedState* shared_state) const;
 
   // Solves a set of linear systems using the diagonal factor.
   void DiagonalSolve(BlasMatrixView<Field>* right_hand_sides) const;
@@ -425,7 +426,7 @@ class Factorization {
 
   void OpenMPLowerTransposeTriangularSolve(
       BlasMatrixView<Field>* right_hand_sides,
-      RightLookingSharedState<Field>* shared_state) const;
+      SolveSharedState* shared_state) const;
 
   // Prints the diagonal of the factorization.
   void PrintDiagonalFactor(const std::string& label, std::ostream& os) const;
@@ -593,6 +594,14 @@ class Factorization {
       shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
   }
 
+  void WriteFinegrainedSolveTimerStats(const std::string &directory, Int max_levels = std::numeric_limits<Int>::max()) const {
+      solve_shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
+  }
+
+  void ResetFinegrainedSolveTimerStats() {
+      solve_shared_state_.finegrained_timers.clear();
+  }
+
   // Only can be called after `InitialFactorizationSetup` because it needs access to
   // the supernode degrees via an allocated `lower_factor_`.
   void WriteSupernodeStats(const std::string& directory, Int max_levels = std::numeric_limits<Int>::max()) const {
@@ -696,9 +705,9 @@ private:
   Buffer<double> work_estimates_;
   double total_work_;
   mutable Buffer<Field> permute_scratch_;
-  mutable RightLookingSharedState<Field> solve_shared_state_;
+  mutable SolveSharedState solve_shared_state_;
 
-  // Julian Panetta: cache right-looking shared state
+  // Julian Panetta: cache right-looking factorization shared state
   RightLookingSharedState<Field> shared_state_;
 
   // Performs the initial analysis (and factorization initialization) for a
@@ -815,9 +824,10 @@ private:
   void LowerTriangularSolveRecursion(Int supernode,
                                      BlasMatrixView<Field>* right_hand_sides,
                                      Buffer<Field>* workspace) const;
+  template<size_t BLOCK_SIZE = 1>
   void OpenMPLowerTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
-      RightLookingSharedState<Field>* shared_state, int level) const;
+      SolveSharedState* shared_state, int level) const;
 
   // Performs the trapezoidal solve associated with a particular supernode.
   void LowerSupernodalTrapezoidalSolve(Int supernode,
@@ -834,13 +844,14 @@ private:
       Buffer<Field>* packed_input_buf) const;
   void OpenMPLowerTransposeTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
-      RightLookingSharedState<Field>* shared_state, int level, tbb::task_group &tg) const;
+      SolveSharedState* shared_state, int level, tbb::task_group &tg) const;
 
   // Performs the trapezoidal solve associated with a particular supernode.
   void LowerTransposeSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       Buffer<Field>* workspace) const;
 
+  template<size_t BLOCK_SIZE = 1>
   void LowerTransposeSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       BlasMatrixView<Field> &work_right_hand_sides) const;

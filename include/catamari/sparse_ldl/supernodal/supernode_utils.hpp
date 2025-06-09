@@ -114,7 +114,7 @@ struct LeftLookingSharedState {
 
 #include <atomic>
 
-struct FineGrainedTimers {
+struct FineGrainedTimersFactorize {
   // Fine-grained timers accumulated per-supernode (threadsafe).
   enum Type { InitializeColumns = 0, /* Allocation,  Recurse, */ MergeSchur, MergeSchurInPara, Deallocation, OuterProduct, FactorDiag, SolveDiag, NumTimers };
   std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
@@ -151,7 +151,47 @@ struct FineGrainedTimers {
   quotient::Timer& operator()(Int supernode, Type type) { return (*this)[type][supernode]; }
 };
 
-template <typename Field>
+struct FineGrainedTimersSolve {
+  // Fine-grained timers accumulated per-supernode (threadsafe) for the solve phase.
+  enum Type { MergeChildContributions = 0,  SolveDiag, MultiplySubdiagonal, OutOfPlaceBacksubUpdate, InPlaceBacksubUpdate, NumTimers };
+  std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
+  Buffer<Int> assigned_thread;
+
+  static std::string nameForType(Type type) {
+    switch (type) {
+      case MergeChildContributions: return "MergeChildContributions";
+      case SolveDiag:               return "SolveDiag";
+      case MultiplySubdiagonal:     return "MultiplySubdiagonal";
+      case OutOfPlaceBacksubUpdate: return "OutOfPlaceBacksubUpdate";
+      case InPlaceBacksubUpdate:    return "InPlaceBacksubUpdate";
+      case NumTimers:
+      default:                      return "Unknown";
+    }
+  }
+
+  void clear() {
+    for (auto &timer : finegrained_timers)
+      timer.Clear();
+    assigned_thread.Clear();
+  }
+
+  Int supernodeCount() const { return finegrained_timers[0].Size(); /* All timers should have the same size. */ }
+
+  void allocate(Int num_supernodes) {
+    clear();
+    for (auto &timer : finegrained_timers) {
+      timer.Resize(num_supernodes);
+    }
+    assigned_thread.Resize(num_supernodes);
+  }
+
+  const Buffer<quotient::Timer>& operator[](Type type) const { return finegrained_timers[type]; }
+        Buffer<quotient::Timer>& operator[](Type type)       { return finegrained_timers[type]; }
+
+  quotient::Timer& operator()(Int supernode, Type type) { return (*this)[type][supernode]; }
+};
+
+template <typename Field, class FineGrainedTimers = FineGrainedTimersFactorize>
 struct RightLookingSharedState {
   RightLookingSharedState() { unsetFailed(); }
   // The Schur complement matrices for each of the supernodes in the
@@ -209,7 +249,7 @@ struct RightLookingSharedState {
         std::stringstream result;
         result << "{ ";
         for (Int i = 0; i < finegrained_timers.NumTimers; ++i) {
-            auto type = FineGrainedTimers::Type(i);
+            auto type = (typename FineGrainedTimers::Type)(i);
             if (i > 0) result << ", ";
             result << '"' << FineGrainedTimers::nameForType(type) << "\": " << finegrained_timers[type][supernode].TotalSeconds();
         }

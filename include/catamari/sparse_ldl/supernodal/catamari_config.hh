@@ -6,8 +6,8 @@
 // #define CATAMARI_ENABLE_TIMERS
 
 #if CATAMARI_FINEGRAINED_TIMERS
-#define FG_START_TIMER(timer_struct, supernode, name) timer_struct(supernode, FineGrainedTimers::name).Start()
-#define  FG_STOP_TIMER(timer_struct, supernode, name) timer_struct(supernode, FineGrainedTimers::name).Stop()
+#define FG_START_TIMER(timer_struct, supernode, name) timer_struct(supernode, decltype(timer_struct)::name).Start()
+#define  FG_STOP_TIMER(timer_struct, supernode, name) timer_struct(supernode, decltype(timer_struct)::name).Stop()
 #else
 #define FG_START_TIMER(timer_struct, supernode, name)
 #define  FG_STOP_TIMER(timer_struct, supernode, name)
