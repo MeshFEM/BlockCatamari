@@ -165,8 +165,12 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     InversePermute(permutation, &right_hand_sides_supernode);
   }
   if (is_cholesky) {
-    LeftLowerTriangularSolvesDynamicBLASDispatch(triangular_right_hand_sides,
-                                                 &right_hand_sides_supernode);
+    if (right_hand_sides_supernode.width > 1)
+        LeftLowerTriangularSolves(triangular_right_hand_sides,
+                                 &right_hand_sides_supernode);
+    else
+        TriangularSolveLeftLower(triangular_right_hand_sides,
+                                 right_hand_sides_supernode.Data());
   } else {
     LeftLowerUnitTriangularSolves(triangular_right_hand_sides,
                                   &right_hand_sides_supernode);
@@ -289,12 +293,21 @@ void Factorization<Field>::LowerTriangularSolve(
   const Int workspace_size = max_degree_ * right_hand_sides->width;
   Buffer<Field> workspace(workspace_size, Field{0});
 
+#if 0
   // Recurse on each tree in the elimination forest.
   const Int num_roots = ordering_.assembly_forest.roots.Size();
   for (Int root_index = 0; root_index < num_roots; ++root_index) {
     const Int root = ordering_.assembly_forest.roots[root_index];
     LowerTriangularSolveRecursion(root, right_hand_sides, &workspace);
   }
+#else
+  // Any postorder will do...
+  const Int num_supernodes = ordering_.supernode_sizes.Size();
+  for (Int s = 0; s < num_supernodes; ++s) {
+    LowerSupernodalTrapezoidalSolve(s, right_hand_sides, &workspace);
+  }
+#endif
+
 }
 
 template <class Field>
@@ -372,9 +385,9 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
               Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
         using VecBlock = VecN_T<Field, BLOCK_SIZE>;
         for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
-          Eigen::Map<VecBlock> wrhs_block(wrhs_ptr);
-          wrhs_block = Eigen::Map<const VecBlock>(rhs_ptr + indices[i]);
-          wrhs_ptr += BLOCK_SIZE;
+          const Field * src = rhs_ptr + indices[i];
+          for (Int c = 0; c < BLOCK_SIZE; ++c)
+            *(wrhs_ptr++) = *(src++);
         }
       }
 
@@ -393,7 +406,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr = right_hand_sides         ->Pointer(0, j);
               Field * const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
-#if 1
+#if 0
         if (is_selfadjoint) {
             constexpr Int CHUNK_SIZE = 6;
             using Vec = VecN_T<Field, CHUNK_SIZE>;
@@ -469,14 +482,14 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
 #else
         for (Int k = 0; k < supernode_size; ++k) {
           const Field *subdiagonal_ptr = subdiagonal.Pointer(0, k);
-          for (Int i = 0; i < subdiagonal.height; ++i) {
-            const Int row = indices[i];
-            if (is_selfadjoint) {
-              srhs_ptr[k] -= Conjugate(subdiagonal_ptr[i]) * rhs_ptr[row];
-            } else {
-              srhs_ptr[k] -=           subdiagonal_ptr[i]  * rhs_ptr[row];
-            }
+          Field val = 0;
+          for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
+            const Field *sdp = subdiagonal_ptr + i;
+            const Field *rhsp = rhs_ptr + indices[i];
+            for (Int c = 0; c < BLOCK_SIZE; ++c)
+                val += *(sdp++) * *(rhsp++);
           }
+          srhs_ptr[k] -= val;
         }
 #endif
       }
@@ -541,6 +554,7 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
   const Int workspace_size = max_degree_ * right_hand_sides->width;
   Buffer<Field> packed_input_buf(workspace_size);
 
+#if 0
   // Recurse from each root of the elimination forest.
   const Int num_roots = ordering_.assembly_forest.roots.Size();
   for (Int root_index = 0; root_index < num_roots; ++root_index) {
@@ -548,6 +562,14 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
     LowerTransposeTriangularSolveRecursion(root, right_hand_sides,
                                            &packed_input_buf);
   }
+#else
+  // Any pre-order will do
+  const Int num_supernodes = ordering_.supernode_sizes.Size();
+  for (Int s = num_supernodes - 1; s >= 0; --s) {
+      LowerTransposeSupernodalTrapezoidalSolve(s, right_hand_sides,
+                                               &packed_input_buf);
+  }
+#endif
 }
 
 }  // namespace supernodal_ldl

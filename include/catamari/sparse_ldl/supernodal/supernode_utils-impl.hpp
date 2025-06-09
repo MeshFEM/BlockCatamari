@@ -711,9 +711,6 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
 
   tbb::task_group tg;
   for (const Int root : ordering.assembly_forest.roots) {
-    #pragma omp task default(none) firstprivate(root)                     \
-        shared(matrix, ordering, supernode_member_to_index, lower_factor, \
-            private_pattern_flags)
     tg.run([root, &matrix, &ordering, &supernode_member_to_index,
             &lower_factor, &private_pattern_flags]() {
       ParallelFillStructureIndicesRecursion(

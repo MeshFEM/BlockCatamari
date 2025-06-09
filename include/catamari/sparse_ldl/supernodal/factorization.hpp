@@ -726,6 +726,11 @@ private:
   void FormSupernodes(const CoordinateMatrix<Field>& matrix,
                       Buffer<Int>* supernode_degrees);
 
+#ifdef CATAMARI_OPENMP
+  void OpenMPFormSupernodes(const CoordinateMatrix<Field>& matrix,
+                            Buffer<Int>* supernode_degrees);
+#endif  // ifdef CATAMARI_OPENMP
+
 private:
   void InitializeFactors(const CoordinateMatrix<Field>& matrix,
                          const Buffer<Int>& supernode_degrees);

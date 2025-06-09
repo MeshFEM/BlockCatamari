@@ -55,7 +55,7 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
                                  &right_hand_sides_supernode);
     else
         TriangularSolveLeftLower(triangular_right_hand_sides,
-                                right_hand_sides_supernode.Data());
+                                 right_hand_sides_supernode.Data());
   } else {
     LeftLowerUnitTriangularSolves(triangular_right_hand_sides,
                                   &right_hand_sides_supernode);
@@ -186,6 +186,7 @@ void Factorization<Field>::OpenMPLowerTriangularSolve(
   }
 
   // Recurse on each tree in the elimination forest.
+#if 1
   const Int num_roots = ordering_.assembly_forest.roots.Size();
   tbb::task_group tg;
   for (Int root_index = 0; root_index < num_roots - 1; ++root_index) {
@@ -195,6 +196,13 @@ void Factorization<Field>::OpenMPLowerTriangularSolve(
   }
   OpenMPLowerTriangularSolveRecursion(ordering_.assembly_forest.roots[num_roots - 1], right_hand_sides, shared_state, 0);
   tg.wait();
+#else
+  const Int num_roots = ordering_.assembly_forest.roots.Size();
+  for (Int root_index = 0; root_index < num_roots; ++root_index) {
+    const Int root = ordering_.assembly_forest.roots[root_index];
+    OpenMPLowerTriangularSolveRecursion(root, right_hand_sides, shared_state, 0);
+  }
+#endif
 }
 
 template <class Field>
