@@ -97,13 +97,18 @@ struct Control {
   // The amount of dynamic regularization -- if any -- to use.
   DynamicRegularizationControl<Field> dynamic_regularization;
 
-  // The minimal supernode size for an out-of-place trapezoidal solve to be
-  // used.
-  Int forward_solve_out_of_place_supernode_threshold = 20;
+  // The following thresholds are now ignored in favor of selecting the
+  // out-of-place code path based on the platform. This is because experiments
+  // have shown the out-of-place update to be always faster than using
+  // Accelerate BLAS on Apple Silicon and always slower than MKL on x86
 
-  // The minimal supernode size for an out-of-place trapezoidal solve to be
-  // used.
-  Int backward_solve_out_of_place_supernode_threshold = 30;
+  // // The minimal supernode size for an out-of-place trapezoidal solve to be
+  // // used.
+  // Int forward_solve_out_of_place_supernode_threshold = 20;
+
+  // // The minimal supernode size for an out-of-place trapezoidal solve to be
+  // // used.
+  // Int backward_solve_out_of_place_supernode_threshold = 30;
 
   // The algorithmic block size for the factorization.
   Int block_size = 64;

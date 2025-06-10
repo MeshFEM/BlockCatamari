@@ -101,6 +101,10 @@ void Factorization<Field>::Solve(
         bool num_rhs_changed = shared_state.schur_complements[0].width != num_rhs;
 
         if (realloc) {
+            // std::cout << "Allocated solve workspace buffer of size "
+            //           << total_size * sizeof(Field) / (1024. * 1024)
+            //           << "MB" << std::endl;
+
             Int offset = 0;
             for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
                 const Int degree = lower_factor_->blocks[supernode].height;
@@ -183,8 +187,18 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   }
 
   // Handle the external updates for this supernode.
+  // Note: it seems that the out-of-place update is always faster than
+  // using Accelerate BLAS on Apple Silicon and always slower than
+  // MKL on x86. So we select based on platform rather than
+  // using the original threshold rule:
+  //        if (supernode_size >= control_.forward_solve_out_of_place_supernode_threshold) {
   const Int* indices = lower_factor_->StructureBeg(supernode);
-  if (supernode_size >= control_.forward_solve_out_of_place_supernode_threshold) {
+#if defined(__APPLE__)
+  static constexpr bool out_of_place = false;
+#else
+  static constexpr bool out_of_place = true;
+#endif
+  if (out_of_place) {
     // Perform an out-of-place GEMM.
     BlasMatrixView<Field> work_right_hand_sides;
     work_right_hand_sides.height = subdiagonal.height;
@@ -377,7 +391,18 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
   if (subdiagonal.height) {
 
     // Handle the external updates for this supernode.
-    if (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) {
+    // Note: it seems that the out-of-place update is always faster than
+    // using Accelerate BLAS on Apple Silicon and always slower than
+    // MKL on x86. So we select based on platform rather than
+    // using the original threshold rule:
+    //      if (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) {
+#if defined(__APPLE__)
+      static constexpr bool out_of_place = false;
+      // bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
+#else
+      static constexpr bool out_of_place = true;
+#endif
+    if (out_of_place) {
       FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
       // Fill the work right_hand_sides.
       for (Int j = 0; j < num_rhs; ++j) {
@@ -406,12 +431,11 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr = right_hand_sides         ->Pointer(0, j);
               Field * const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
-#if 0
+#if 1
         if (is_selfadjoint) {
             constexpr Int CHUNK_SIZE = 6;
             using Vec = VecN_T<Field, CHUNK_SIZE>;
             Int k;
-#if 1 // Block version
             using VecBlock = VecN_T<Field, BLOCK_SIZE>;
             using Block = Eigen::Matrix<Field, BLOCK_SIZE, CHUNK_SIZE>;
             // Eigen::Stride Gotcha: for single-row matrices, even in column
@@ -440,24 +464,6 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
               }
               srhs_ptr[k] -= val;
             }
-#else
-            for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
-              Vec val = rhs_ptr[indices[0]] * Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(0, k), Eigen::InnerStride<>(subdiagonal.leading_dim)).conjugate();
-              const Field *subdiagonal_ptr = subdiagonal.Pointer(0, k);
-              for (Int i = 1; i < subdiagonal.height; ++i) {
-                Vec c = Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(i, k), Eigen::InnerStride<>(subdiagonal.leading_dim)).conjugate();
-                val += rhs_ptr[indices[i]] * c;
-              }
-              Eigen::Map<Vec>(srhs_ptr + k) -= val;
-            }
-            for (; k < supernode_size; ++k) {
-              Field val = 0;
-              for (Int i = 0; i < subdiagonal.height; ++i) {
-                val += Conjugate(subdiagonal(i, k)) * rhs_ptr[indices[i]];
-              }
-              srhs_ptr[k] -= val;
-            }
-#endif
         }
         else {
             constexpr Int CHUNK_SIZE = 6;
