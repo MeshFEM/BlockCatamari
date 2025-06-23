@@ -439,6 +439,8 @@ class Factorization {
   // Prints the unit lower-triangular matrix.
   void PrintLowerFactor(const std::string& label, std::ostream& os) const;
 
+  Int GetFactorNNZ() const { return nnz_; }
+
   // Returns a view of the given supernode's permutation vector.
   // NOTE: This is only valid when control.supernodal_pivoting is true.
   BlasMatrixView<Int> SupernodePermutation(Int supernode);
@@ -698,6 +700,11 @@ public:
 
   // The block-diagonal factor.
   std::unique_ptr<DiagonalFactor<Field>> diagonal_factor_;
+
+  // Number of stored scalar nonzeros in L.
+  // This is less than the values actually stored since the diagonal blocks are
+  // not stored in a packed format.
+  Int nnz_ = 0;
 
   BlasMatrix<Field> factor_values_;
 private:

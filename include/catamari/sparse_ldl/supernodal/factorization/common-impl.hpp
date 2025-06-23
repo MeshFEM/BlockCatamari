@@ -160,11 +160,15 @@ void Factorization<Field>::m_allocateFactors(const Buffer<Int> &supernode_degree
     // Count sizes of the lower and diagonal parts of the factor.
     Int diagSize = 0, lowerSize = 0;
     const Int num_supernodes = supernode_degrees.Size();
+    nnz_ = 0;
     for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
         const Int degree = supernode_degrees[supernode];
         const Int supernode_size = ordering_.supernode_sizes[supernode];
          diagSize += supernode_size * supernode_size;
         lowerSize += supernode_size * degree;
+
+        nnz_ += (supernode_size * (supernode_size + 1)) / 2 // Entries in the lower triangle of the diagonal block
+               + supernode_size * degree; // entries in the lower block
     }
 
     // Allocate a single buffer holding both parts of the factor.
