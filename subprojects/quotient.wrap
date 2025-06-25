@@ -1,5 +1,5 @@
 [wrap-git]
 directory = quotient
-url = https://gitlab.com/hodge_star/quotient.git
-revision = cf8a9ae5853821e62320bb0be6c87fa6ad1dec36
+url = https://github.com/MeshFEM/quotient
+revision = 06791450cd42097b212ae238ab5d2d045ca55a87
 clone-recursive = true
