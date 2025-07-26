@@ -2727,6 +2727,38 @@ inline void RightLowerAdjointTriangularSolves(
    &leading_dim_blas);
 }
 
+#if 0 // Experiment with mixing Accelerate and OpenBLAS
+#include <dlfcn.h>
+struct DynamicallyLoadedOpenBLAS {
+    typedef void (*dtrsm_t)(const char* side, const char* uplo,
+                            const char* trans_triang, const char* diag,
+                            const BlasInt* height, const BlasInt* width,
+                            const double* alpha, const double* triang_matrix,
+                            const BlasInt* triang_leading_dim, double* matrix,
+                            const BlasInt* leading_dim);
+
+    DynamicallyLoadedOpenBLAS() {
+        const char* libname = "/opt/local/lib/libopenblas.dylib";
+        m_handle = dlopen(libname, RTLD_LAZY | RTLD_LOCAL);
+        if (!m_handle) throw std::runtime_error("Failed to load OpenBLAS library");
+
+        dtrsm = (dtrsm_t) dlsym(m_handle, "dtrsm_");
+        if (!dtrsm) throw std::runtime_error("Failed to load dtrsm function from OpenBLAS");
+    }
+
+    ~DynamicallyLoadedOpenBLAS() {
+        if (m_handle) { dlclose(m_handle); }
+    }
+
+    dtrsm_t dtrsm = nullptr;  // Pointer to the dtrsm function in OpenBLAS.
+
+private:
+    void *m_handle = nullptr;  // Handle to the loaded library.
+};
+
+static DynamicallyLoadedOpenBLAS openblas;
+#endif
+
 template <>
 inline void RightLowerAdjointTriangularSolves(
     const ConstBlasMatrixView<double>& triangular_matrix,

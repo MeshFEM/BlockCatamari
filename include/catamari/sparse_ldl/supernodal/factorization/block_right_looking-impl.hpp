@@ -47,7 +47,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     const bool has_children = ordering_.assembly_forest.child_offsets[supernode + 1] > ordering_.assembly_forest.child_offsets[supernode];
 
     Int num_supernode_pivots;
-    const bool single_thread = get_max_num_tbb_threads() < 2;
+    const bool single_thread = shared_state->num_tbb_threads < 2;
     if (control_.supernodal_pivoting) {
         BlasMatrixView<Int> permutation = SupernodePermutation(supernode);
         num_supernode_pivots = PivotedFactorDiagonalBlock(
@@ -101,12 +101,15 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     FG_START_TIMER(shared_state->finegrained_timers, supernode, SolveDiag);
     Int tile_size = control_.factor_tile_size;
 #if 1
-    if ((lower_block.height > 1.5 * tile_size) && !single_thread) {
+    if ((lower_block.height > 2 * tile_size) && !single_thread) {
+        // First determine the number of tiles based on the target tile size.
         Int num_tiles = (lower_block.height + tile_size - 1) / tile_size;
-        tbb::parallel_for(tbb::blocked_range<Int>(0, num_tiles, 1), [&lower_block, &diagonal_block, tile_size](const tbb::blocked_range<Int> &r) {
+        // Then produce as even-sized tiles as possible.
+        Int trsm_tile_size = (lower_block.height + num_tiles - 1) / num_tiles;
+        tbb::parallel_for(tbb::blocked_range<Int>(0, num_tiles, 1), [&lower_block, &diagonal_block, trsm_tile_size](const tbb::blocked_range<Int> &r) {
             for (Int i_tile = r.begin(); i_tile < r.end(); ++i_tile) {
-                Int i = i_tile * tile_size;
-                const Int tsize = std::min(lower_block.height - i, tile_size);
+                Int i = i_tile * trsm_tile_size;
+                const Int tsize = std::min(lower_block.height - i, trsm_tile_size);
                 BlasMatrixView<Field> tile = lower_block.Submatrix(i, 0, tsize, lower_block.width);
                 RightLowerAdjointTriangularSolves(diagonal_block.ToConst(), &tile);
             }
@@ -359,8 +362,9 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         BlasMatrixView<Field> diagonal_block = diagonal_factor_->blocks[supernode];
         if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
 
-        // Construct a stack for holding the child schur complements of the subtree rooted at `supernode` (if it doesn't exist already)
-        if (subtreeStorage == nullptr) {
+        // Construct a stack for holding the child schur complements of the serial subtree rooted at `supernode` (if it doesn't exist already)
+        const bool serialSubtree = (work_estimate < min_parallel_work); // make sure we're actually in a serial subtree rather than simply having a single child...
+        if (serialSubtree && (subtreeStorage == nullptr)) { // Root of the serial subtree.
             // FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation); // Allocation time is apparently pretty negligible, especially if we do multiple numeric factorizations in a row.
             subtreeStorage = &(shared_state->schur_complement_storage[supernode]);
             subtreeStorage->reallocate(subtreeStorage->getStoragedNeeded(supernode, ordering_.assembly_forest, *lower_factor_));
@@ -396,13 +400,15 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             // Note: this will not deallocate the stack itself; that is done by the
             // parent of the serial subtree root (if run in parallel), or the
             // top-level BlockRightLooking loop.
-            subtreeStorage->free(sc_child);
+            if (serialSubtree) subtreeStorage->free(sc_child);
+            else shared_state->schur_complement_storage[child].deallocate();
         }
     }
     else {
         // FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
-        tbb::task_group tg(*(shared_state->tbb_ctx));
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);
+
+        tbb::task_group tg(*(shared_state->tbb_ctx));
         for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
             const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
             tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
@@ -484,8 +490,8 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     BENCHMARK_SCOPED_TIMER_SECTION timer("BlockRightLooking<" + std::to_string(BlockSize) + ">");
     typedef ComplexBase<Field> Real;
 
-    // const Int max_threads = omp_get_max_threads();
     const Int max_threads = get_max_num_tbb_threads();
+    shared_state_.num_tbb_threads = max_threads;
     Buffer<PrivateState<Field>> private_states(max_threads);
     if (control_.factorization_type != kCholeskyFactorization) {
         const Int workspace_size = max_lower_block_size_;
@@ -499,18 +505,37 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     Buffer<double> &work_estimates = work_estimates_;
     double &total_work = total_work_;
     if (work_estimates.Size() != num_supernodes) {
+        total_work = 0;
         work_estimates.Resize(num_supernodes, 0.0); // Must be initialized!
         for (const Int& root : ordering_.assembly_forest.roots) {
             FillSubtreeWorkEstimates(root, ordering_.assembly_forest, *lower_factor_,
                     &work_estimates);
+            total_work += work_estimates[root];
         }
 
-        total_work = std::accumulate(work_estimates.begin(), work_estimates.end(), 0.);
+        // TODO: correct this and measure impact on parallelism
+        // (the work estimates are already cumulative and so the total work is
+        // just the work estimate of the root(s)).
+        // total_work = std::accumulate(work_estimates.begin(), work_estimates.end(), 0.);
     }
-
     const double min_parallel_ratio_work = (total_work * control_.parallel_ratio_threshold) / max_threads;
     const double min_parallel_work = std::max(std::max(control_.min_parallel_threshold, min_parallel_ratio_work),
             max_threads < 2 ? std::numeric_limits<double>::infinity() : 0); // Forbid parallel execution
+#if 0
+    std::cout << "parallel_ratio_threshold: " << control_.parallel_ratio_threshold
+              << ", min_parallel_threshold: " << control_.min_parallel_threshold << std::endl;
+    std::cout << "Total work: " << total_work << ", min_parallel_work: " << min_parallel_work
+              << ", max_threads: " << max_threads << std::endl;
+
+    {
+        size_t parallel_supernode_count = 0;
+        for (Int i = 0; i < num_supernodes; ++i) {
+            if (work_estimates[i] >= min_parallel_work)
+                ++parallel_supernode_count;
+        }
+        std::cout << "Parallel supernodes: " << parallel_supernode_count << std::endl;
+    }
+#endif
 
     // Allocate the map from child structures to parent fronts.
     auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
@@ -528,6 +553,30 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     if (shared_state.cholesky_flowgraphs.size() != num_supernodes) {
         shared_state.cholesky_flowgraphs.clear();
         shared_state.cholesky_flowgraphs.resize(num_supernodes); // .assign(num_supernodes, nullptr) tries to copy a unique_ptr...
+    }
+
+    {
+        // Determine the amount of memory needed to store the Schur
+        // complements in one contiguous buffer (without freeing).
+        Int storage_size = 0;
+        for (Int s = 0; s < num_supernodes; ++s) {
+            const bool parallel = (work_estimates[s] >= min_parallel_work) && (max_threads > 1);
+            Int degree = lower_factor_->blocks[s].height;
+            if (parallel)
+                storage_size += degree * degree;
+            else {
+                // Subtree storage stacks are allocated only for the roots of
+                // serial trees.
+                const bool parallel_parent = (work_estimates[ordering_.assembly_forest.parents[s]] >= min_parallel_work) && (max_threads > 1);
+                SchurComplementStorage<Field> *subtreeStorage = &(shared_state_.schur_complement_storage[s]);
+                if (parallel_parent)
+                    storage_size += subtreeStorage->getStoragedNeeded(s, ordering_.assembly_forest, *lower_factor_);
+            }
+        }
+
+        // std::cout << "Total Schur complement storage: " << storage_size * sizeof(Field) / 1024 / 1024 << " MB." << std::endl;
+        // std::cout << "    As fraction of factor size: "
+        //           << (double(storage_size) / factor_values_.data.Size()) << std::endl;
     }
 
 #if CATAMARI_FINEGRAINED_TIMERS

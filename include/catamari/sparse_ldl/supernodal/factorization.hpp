@@ -597,6 +597,21 @@ class Factorization {
       return result;
   }
 
+  double EstimateTotalWork() const {
+      const Int num_supernodes = ordering_.supernode_sizes.Size();
+      double flop_estimate = 0;
+      for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
+          const ConstBlasMatrixView<Field> &lower_block = lower_factor_->blocks[supernode].ToConst();
+          const Int s = lower_block.width;  // supernode size
+          const Int d = lower_block.height; // degree
+          flop_estimate += s * s * s / 3.; // Factor diagonal block: s^3 / 3
+          flop_estimate += s * s * d;      // Solve against diagonal block: s^2 d
+          flop_estimate += d * d * s;      // Schur complement update outer products: d^2 s
+      }
+
+      return flop_estimate;
+  }
+
   void WriteFinegrainedTimerStats(const std::string &directory, Int max_levels = std::numeric_limits<Int>::max()) const {
       shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
   }

@@ -148,8 +148,11 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
     bool symbolic_only) {
   BENCHMARK_SCOPED_TIMER_SECTION meshfemtimer("SparseLDL.Factor");
   ScopedEnableFlushToZero scope_guard;
+
+  BENCHMARK_START_TIMER_SECTION("Factorization reset");
   scalar_factorization.reset();
   supernodal_factorization.reset();
+  BENCHMARK_STOP_TIMER_SECTION("Factorization reset");
 
   if (control.supernodal_strategy == kScalarFactorization) {
     is_supernodal = false;

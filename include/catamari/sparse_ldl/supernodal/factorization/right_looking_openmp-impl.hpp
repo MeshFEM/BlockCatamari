@@ -613,6 +613,9 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
                   &work_estimates);
       }
 
+      // TODO: correct this and measure impact on parallelism
+      // (the work estimates are already cumulative and so the total work is
+      // just the work estimate of the root(s)).
       total_work = std::accumulate(work_estimates.begin(), work_estimates.end(), 0.);
   }
 

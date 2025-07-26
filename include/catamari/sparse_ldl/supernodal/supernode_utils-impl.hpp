@@ -745,10 +745,11 @@ void FillSubtreeWorkEstimates(Int root, const AssemblyForest& supernode_forest,
 
   const ConstBlasMatrixView<Field>& lower_block =
       lower_factor.blocks[root].ToConst();
-  const Int supernode_size = lower_block.width;
-  const Int degree = lower_block.height;
-  (*work_estimates)[root] += std::pow(1. * supernode_size, 3.) / 3;      // Elimination
-  (*work_estimates)[root] += std::pow(1. * degree, 2.) * supernode_size; // Outer product to form Schur complement
+  const Int s = lower_block.width;  // supernode size
+  const Int d = lower_block.height; // degree
+  (*work_estimates)[root] += s * s * s / 3.; // Factor diagonal block: s^3 / 3
+  (*work_estimates)[root] += s * s * d;      // Solve against diagonal block: s^2 d
+  (*work_estimates)[root] += d * d * s;      // Schur complement update outer products: d^2 s
 }
 
 template <class Field>

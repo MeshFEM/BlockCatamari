@@ -261,6 +261,9 @@ struct RightLookingSharedState {
 #endif
   }
 
+  size_t num_tbb_threads = 1; // cache for get_max_num_tbb_threads() call (which
+                              // can be expensive due to its TBB mutex lock)
+
 private:
   std::atomic<bool> m_fail; // Global flag to indicate factorization failure and accelerate early-exit in parallel case.
 };

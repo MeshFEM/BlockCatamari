@@ -26,14 +26,10 @@
 namespace catamari {
 namespace supernodal_ldl {
 
-// Manage the storage used to evaluate the Schur complements of all
-// *children* of a supernode in serial.
-// (The subtree root supernode's Schur complement will be stored
-// on the heap by the parent "parallel" node).
 template<class Field>
 struct SchurComplementStorage {
     // Calculate the total storage needed to evaluate the Schur complement block of
-    // `supernode`'s frontal matrix (onto the top of the stack)
+    // `supernode`'s frontal matrix.
     static Int storageNeeded(Int supernode, const AssemblyForest &af, const LowerFactor<Field> &lf) {
         const Int degree = lf.blocks[supernode].height;
         if (af.NumChildren(supernode) == 0) {
