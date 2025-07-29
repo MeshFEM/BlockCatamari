@@ -31,9 +31,10 @@ FetchContent_Declare(
 )
 
 # Optionally override mimalloc options before build
-set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(MI_BUILD_SHARED ON CACHE BOOL "" FORCE)
+set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
+set(MI_BUILD_SHARED ON  CACHE BOOL "" FORCE)
 set(MI_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+set(MI_OVERRIDE     OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(mimalloc)
 
