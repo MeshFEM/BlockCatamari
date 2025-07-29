@@ -20,8 +20,10 @@
 #define SCHURCOMPLEMENTSTORAGE_HPP
 
 #include "catamari/sparse_ldl/supernodal/factorization.hpp"
-#include <Eigen/Dense>
+#include <tbb/scalable_allocator.h>
+#include <mimalloc.h>
 #include <limits>
+#include <memory>
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -101,8 +103,8 @@ struct SchurComplementStorage {
 
     SchurComplementStorage(Int cap = 0) { reallocate(cap); }
 
-    void reallocate(Int s) { m_storage.resize(s); m_stackTop = 0; }
-    Int capacity() const { return m_storage.size(); }
+    void reallocate(Int s) { if (m_capacity != s) { m_reallocate(s); } m_stackTop = 0; }
+    Int capacity() const { return m_capacity; }
     Int     size() const { return m_stackTop; }
 
     BlasMatrixView<Field> allocateSingleMatrixForDegree(int degree) {
@@ -110,14 +112,14 @@ struct SchurComplementStorage {
         return push(degree);
     }
 
-    void deallocate() { m_storage.resize(0); m_stackTop = 0; }
+    void deallocate() { m_deallocate(); m_stackTop = 0; }
 
     // Allocate a `n x n` matrix at the top of the stack
     BlasMatrixView<Field> push(Int n) {
         if (size() + n * n > capacity()) throw std::runtime_error("Ran out of stack space attempting push " + std::to_string(n * n) + " at size " + std::to_string(size()) + "/" + std::to_string(capacity()));
         BlasMatrixView<Field> result;
         result.width = result.height = result.leading_dim = n;
-        result.data = m_storage.data() + m_stackTop;
+        result.data = m_storage + m_stackTop;
         m_stackTop += n * n;
         // std::cout << "Push " << n * n << ", new size " << size() << "/" << capacity() << std::endl;
         return result;
@@ -142,8 +144,15 @@ struct SchurComplementStorage {
         return m_cachedStorageNeeded;
     }
 
+    ~SchurComplementStorage() { m_deallocate(); }
+
 private:
-    Eigen::Matrix<Field, Eigen::Dynamic, 1> m_storage;
+    // Storage management
+    void m_reallocate(Int s) { m_deallocate(); m_storage = (Field *) mi_malloc(s * sizeof(Field)); m_capacity = s; }
+    void m_deallocate() { if (m_storage != nullptr) mi_free(m_storage); m_storage = nullptr; m_capacity = 0; }
+
+    Field *m_storage = nullptr;
+    Int m_capacity = 0;
     Int m_stackTop = 0;
     Int m_cachedStorageNeeded = -1; // cache to avoid repeated calculation of subtree storage requirements.
 };

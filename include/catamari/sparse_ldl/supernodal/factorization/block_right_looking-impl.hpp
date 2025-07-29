@@ -26,7 +26,7 @@
 #include <cassert>
 #include "../catamari_config.hh"
 
-#define FINEGRAINED_PARALLELISM 0
+#define REUSE_CHOLESKY_FLOWGRAPHS 0
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -58,12 +58,18 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         FG_START_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
 #if 1
         if ((diagonal_block.height > 3 * control_.factor_tile_size) && !single_thread) {
+#if REUSE_CHOLESKY_FLOWGRAPHS
             auto &fg = shared_state->cholesky_flowgraphs[supernode];
             if (!fg) {
                 fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
                 fg->failureCallback = [shared_state]() { shared_state->setFailed(); };
             }
             num_supernode_pivots = fg->run(diagonal_block);
+#else
+            CholeskyFlowgraph<Field> fg(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
+            fg.failureCallback = [shared_state]() { shared_state->setFailed(); };
+            num_supernode_pivots = fg.run(diagonal_block);
+#endif
         } else {
             num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
         }
@@ -550,10 +556,12 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         shared_state.schur_complements.Resize(num_supernodes);
         shared_state.schur_complement_storage.Resize(num_supernodes);
     }
+#if REUSE_CHOLESKY_FLOWGRAPHS
     if (shared_state.cholesky_flowgraphs.size() != num_supernodes) {
         shared_state.cholesky_flowgraphs.clear();
         shared_state.cholesky_flowgraphs.resize(num_supernodes); // .assign(num_supernodes, nullptr) tries to copy a unique_ptr...
     }
+#endif
 
     {
         // Determine the amount of memory needed to store the Schur

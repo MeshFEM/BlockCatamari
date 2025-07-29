@@ -20,7 +20,6 @@ namespace catamari {
 template <class Field>
 struct CholeskyFlowgraph {
     using Node = tbb::flow::continue_node<tbb::flow::continue_msg>;
-    using NodePtr = std::shared_ptr<Node>;
     using Real = ComplexBase<Field>;
 
     CholeskyFlowgraph(tbb::task_group_context &ctx_, const BlasMatrixView<double> &matrix_, Int tile_size, Int block_size_, bool force_serial = false)
@@ -33,7 +32,10 @@ struct CholeskyFlowgraph {
         Int num_tiles = (height + tile_size - 1) / tile_size; // Number of tiles along width and height
         Eigen::Matrix<Node *, Eigen::Dynamic, Eigen::Dynamic> last_update;
         last_update.setConstant(num_tiles, num_tiles, nullptr);
-
+        Int num_nodes = num_tiles // for the diagonal blocks
+                  + (num_tiles * (num_tiles - 1)) / 2 // for the subdiagonal blocks
+                  + (num_tiles * (num_tiles + 1) * (num_tiles - 1)) / 6; // for the low-rank updates
+        nodes.reserve(num_nodes);
         num_pivots = 0;
 
         for (Int j = 0; j < num_tiles; ++j) {
@@ -41,7 +43,7 @@ struct CholeskyFlowgraph {
             Int tsize_j = std::min(tile_size, height - tstart_j);
 
             // Cholesky factorization of diagonal block (j, j)
-            nodes.push_back(std::make_shared<Node>(g, [this, tstart_j, tsize_j](const tbb::flow::continue_msg &msg) {
+            nodes.emplace_back(g, [this, tstart_j, tsize_j](const tbb::flow::continue_msg &msg) {
                 BlasMatrixView<Field> block_j_j = matrix.Submatrix(tstart_j, tstart_j, tsize_j, tsize_j);
                 const Int p = LowerCholeskyFactorization(block_size, &block_j_j);
                 num_pivots += p; // Note: diagonal blocks are factorized sequentially due to dependencies, so this pivot count accumulation need not be atomic!
@@ -51,9 +53,9 @@ struct CholeskyFlowgraph {
                     m_cancelExecution();
                 }
                 return msg;
-            }));
+            });
 
-            Node *factor_j_j = nodes.back().get();
+            Node *factor_j_j = &nodes.back();
             // The factorization of block (j, j) can only start when it has received its final update.
             if (last_update(j, j) != nullptr)
                 tbb::flow::make_edge(*last_update(j, j), *factor_j_j);
@@ -64,14 +66,14 @@ struct CholeskyFlowgraph {
                 Int tsize_i = std::min(tile_size, height - tstart_i);
 
                 // Solve for subdiagonal block (i, j)
-                nodes.push_back(std::make_shared<Node>(g, [this, tstart_j, tstart_i, tsize_j, tsize_i](const tbb::flow::continue_msg &msg) {
+                nodes.emplace_back(g, [this, tstart_j, tstart_i, tsize_j, tsize_i](const tbb::flow::continue_msg &msg) {
                     BlasMatrixView<Field> block_j_j = matrix.Submatrix(tstart_j, tstart_j, tsize_j, tsize_j);
                     BlasMatrixView<Field> block_i_j = matrix.Submatrix(tstart_i, tstart_j, tsize_i, tsize_j);
                     RightLowerAdjointTriangularSolves(block_j_j.ToConst(), &block_i_j);
                     return msg;
-                }));
+                });
 
-                Node *solve_i_j = nodes.back().get();
+                Node *solve_i_j = &nodes.back();
                 tbb::flow::make_edge(*factor_j_j, *solve_i_j);
                 if (last_update(i, j) != nullptr) // Make sure the (i, j) block has received all its updates.
                     tbb::flow::make_edge(*last_update(i, j), *solve_i_j);
@@ -81,13 +83,13 @@ struct CholeskyFlowgraph {
                 Int tstart_i = i * tile_size;
                 Int tsize_i = std::min(tile_size, height - tstart_i);
 
-                Node *solve_i_j = nodes[solve_jp1_j_offset + i - (j + 1)].get();
+                Node *solve_i_j = &nodes[solve_jp1_j_offset + i - (j + 1)];
 
                 for (Int j2 = j + 1; j2 < i; ++j2) {
                     Int tstart_j2 = j2 * tile_size;
                     Int tsize_j2 = std::min(tile_size, height - tstart_j2);
                     // Low-rank update of block (i, j2) for j2 < i
-                    nodes.push_back(std::make_shared<Node>(g, [this, tstart_j, tstart_i, tstart_j2, tsize_j, tsize_i, tsize_j2](const tbb::flow::continue_msg &msg) {
+                    nodes.emplace_back(g, [this, tstart_j, tstart_i, tstart_j2, tsize_j, tsize_i, tsize_j2](const tbb::flow::continue_msg &msg) {
                         BlasMatrixView<Field> block_i_j  = matrix.Submatrix(tstart_i , tstart_j , tsize_i , tsize_j );
                         BlasMatrixView<Field> block_j2_j = matrix.Submatrix(tstart_j2, tstart_j , tsize_j2, tsize_j );
                         BlasMatrixView<Field> block_i_j2 = matrix.Submatrix(tstart_i , tstart_j2, tsize_i , tsize_j2);
@@ -95,26 +97,26 @@ struct CholeskyFlowgraph {
                         MatrixMultiplyNormalAdjoint(Field{-1}, block_i_j.ToConst(), block_j2_j.ToConst(),
                                                     Field{ 1}, &block_i_j2);
                         return msg;
-                    }));
-                    Node *solve_j2_j = nodes[solve_jp1_j_offset + j2 - (j + 1)].get();
-                    tbb::flow::make_edge(*solve_i_j , *nodes.back());
-                    tbb::flow::make_edge(*solve_j2_j, *nodes.back());
+                    });
+                    Node *solve_j2_j = &nodes[solve_jp1_j_offset + j2 - (j + 1)];
+                    tbb::flow::make_edge(*solve_i_j , nodes.back());
+                    tbb::flow::make_edge(*solve_j2_j, nodes.back());
                     if (last_update(i, j2) != nullptr) // Make sure the (i, j2) block has received all its updates.
-                        tbb::flow::make_edge(*last_update(i, j2), *nodes.back());
-                    last_update(i, j2) = nodes.back().get();
+                        tbb::flow::make_edge(*last_update(i, j2), nodes.back());
+                    last_update(i, j2) = &nodes.back();
                 }
 
                 // Low-rank update of the diagonal block (i, i)
-                nodes.push_back(std::make_shared<Node>(g, [this, tstart_j, tstart_i, tsize_j, tsize_i](const tbb::flow::continue_msg &msg) {
+                nodes.emplace_back(g, [this, tstart_j, tstart_i, tsize_j, tsize_i](const tbb::flow::continue_msg &msg) {
                     BlasMatrixView<Field> block_i_i = matrix.Submatrix(tstart_i, tstart_i, tsize_i, tsize_i);
                     BlasMatrixView<Field> block_i_j = matrix.Submatrix(tstart_i, tstart_j, tsize_i, tsize_j);
                     LowerNormalHermitianOuterProduct(Real{-1}, block_i_j.ToConst(), Real{1}, &block_i_i);
                     return msg;
-                }));
-                tbb::flow::make_edge(*solve_i_j, *nodes.back());
+                });
+                tbb::flow::make_edge(*solve_i_j, nodes.back());
                 if (last_update(i, i) != nullptr) // Make sure the (i, i) block has received all its updates.
-                    tbb::flow::make_edge(*last_update(i, i), *nodes.back());
-                last_update(i, i) = nodes.back().get();
+                    tbb::flow::make_edge(*last_update(i, i), nodes.back());
+                last_update(i, i) = &nodes.back();
             }
         }
     }
@@ -124,7 +126,7 @@ struct CholeskyFlowgraph {
         if (serial) return LowerCholeskyFactorizationDynamicBLASDispatch(block_size, &matrix);
 
         num_pivots = 0;
-        nodes[0]->try_put(tbb::flow::continue_msg());
+        nodes[0].try_put(tbb::flow::continue_msg());
         g.wait_for_all();
         if (num_pivots < matrix.height) g.reset(); // Graph must be reset after it is cancelled.
         return num_pivots;
@@ -148,7 +150,7 @@ struct CholeskyFlowgraph {
 
     tbb::task_group_context &ctx;
     tbb::flow::graph g;
-    std::vector<NodePtr> nodes;
+    std::vector<Node> nodes;
     Int num_pivots;
 
     // Failure notification sent in advance of cancelling all tasks in `ctx`.

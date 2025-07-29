@@ -20,6 +20,26 @@ if (CATAMARI_WITH_OPENMP)
     find_package(OpenMP REQUIRED)
 endif()
 
+################################################################################
+# Bring in `mimalloc` to accelerate Schur complement memory allocation.
+################################################################################
+include(FetchContent)
+FetchContent_Declare(
+  mimalloc
+  GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+  GIT_TAG dfa50c37d951128b1e77167dd9291081aa88eea4
+)
+
+# Optionally override mimalloc options before build
+set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MI_BUILD_SHARED ON CACHE BOOL "" FORCE)
+set(MI_BUILD_STATIC OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(mimalloc)
+
+################################################################################
+# Create the `catamari` library target.
+################################################################################
 if (NOT TARGET catamari)
     add_library(catamari INTERFACE)
     # TODO: actually detect the proper flags here rather than hard-coding for
@@ -38,11 +58,14 @@ if (NOT TARGET catamari)
         target_link_libraries(catamari INTERFACE OpenMP::OpenMP_CXX)
     endif()
 
-    target_link_libraries(catamari INTERFACE BLAS::BLAS)
+    target_link_libraries(catamari INTERFACE BLAS::BLAS mimalloc)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/quotient/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/mantis/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/specify/include)
+
+    target_include_directories(catamari SYSTEM INTERFACE ${mimalloc_SOURCE_DIR}/include)
+
     set_target_properties(catamari PROPERTIES INTERFACE_COMPILE_FEATURES cxx_std_14)
 
     # trigger meson to download the subprojects
