@@ -203,7 +203,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockLeftLooking() { // matrix data
     CATAMARI_START_TIMER(profile.left_looking);
     const Int num_supernodes = ordering_.supernode_sizes.Size();
 
-    ordering_.assembly_forest.FillPostorder();
+    // ordering_.assembly_forest.FillPostorder();
 
     BENCHMARK_SCOPED_TIMER_SECTION timer("BlockLeftLooking<" + std::to_string(BlockSize) + ">");
 
@@ -221,7 +221,8 @@ SparseLDLResult<Field> Factorization<Field>::BlockLeftLooking() { // matrix data
     CATAMARI_STOP_TIMER(profile.left_looking_allocate);
 
     SparseLDLResult<Field> result;
-    for (Int supernode : ordering_.assembly_forest.postorder) {
+    // for (Int supernode : ordering_.assembly_forest.postorder) {
+    for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
         CATAMARI_START_TIMER(profile.left_looking_update);
 
         CATAMARI_START_TIMER(profile.initialize_columns);

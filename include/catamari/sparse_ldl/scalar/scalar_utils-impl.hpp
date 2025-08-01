@@ -85,9 +85,7 @@ void EliminationForest(const CoordinateMatrix<Field>& matrix,
     const Int row_end = matrix.RowEntryOffset(orig_row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
       const Int orig_col = entries[index].column;
-      // if (orig_col >= orig_row) continue; // Skip upper triangle
       ProcessEdge(row, ordering.permutation[orig_col], parents, ancestors);
-      // ProcessEdge(ordering.permutation[entries[index].column], row, parents, ancestors); // JP: Symmetry
     }
   }
 }
@@ -111,72 +109,56 @@ template <class Field>
 void ParallelEliminationForestAndDegreesRecursion(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
     Int root, bool keep_structures, Buffer<Int>* parents, Buffer<Int>* degrees,
-    Buffer<Buffer<std::vector<Int>>>* private_children_lists,
+    std::vector<std::atomic<bool>> &children_list_locks,
+    Buffer<std::vector<Int>>* children_lists,
     Buffer<Buffer<Int>>* structures, Buffer<Buffer<Int>>* private_pattern_flags,
-    Buffer<Buffer<Int>>* private_tmp_structures) {
+    Buffer<Buffer<Int>>* private_tmp_structures, int depth = 0) {
   const Int order_child_beg = ordering.assembly_forest.child_offsets[root];
   const Int order_child_end = ordering.assembly_forest.child_offsets[root + 1];
 
-  tbb::task_group tg;
-  for (Int index = order_child_beg; index < order_child_end; ++index) {
-    const Int child = ordering.assembly_forest.children[index];
+  if (depth < 8) {
+      tbb::task_group tg;
+      for (Int index = order_child_beg; index < order_child_end; ++index) {
+        const Int child = ordering.assembly_forest.children[index];
 
-    tg.run([keep_structures, child, &matrix, &ordering, parents, degrees,
-         &private_children_lists, &structures, &private_pattern_flags,
-         &private_tmp_structures]() {
-            ParallelEliminationForestAndDegreesRecursion(
-                matrix, ordering, child, keep_structures, parents, degrees,
-                private_children_lists, structures, private_pattern_flags,
-                private_tmp_structures);
-    });
+        tg.run([keep_structures, child, &matrix, &ordering, parents, degrees,
+             &children_list_locks, children_lists, structures, private_pattern_flags,
+             private_tmp_structures, depth]() {
+                ParallelEliminationForestAndDegreesRecursion(
+                    matrix, ordering, child, keep_structures, parents, degrees,
+                    children_list_locks, children_lists, structures, private_pattern_flags,
+                    private_tmp_structures, depth + 1);
+        });
+      }
+      tg.wait();
   }
-  tg.wait();
+  else {
+      for (Int index = order_child_beg; index < order_child_end; ++index) {
+        const Int child = ordering.assembly_forest.children[index];
+        ParallelEliminationForestAndDegreesRecursion(
+            matrix, ordering, child, keep_structures, parents, degrees,
+            children_list_locks, children_lists, structures, private_pattern_flags,
+            private_tmp_structures, depth + 1);
+      }
+  }
 
   const int thread = tbb::this_task_arena::current_thread_index();
-  Buffer<std::vector<Int>>& children_list = (*private_children_lists)[thread];
   Buffer<Int>& pattern_flags = (*private_pattern_flags)[thread];
   Buffer<Int>& tmp_structure = (*private_tmp_structures)[thread];
+  if (pattern_flags.Size() == 0) pattern_flags.Resize(matrix.NumRows(), -1);
 
-  const Int supernode_size = ordering.supernode_sizes[root];
   const Int supernode_offset = ordering.supernode_offsets[root];
+  const Int supernode_end = ordering.supernode_sizes[root] + supernode_offset;
   const bool have_permutation = !ordering.permutation.Empty();
   const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
-  for (Int column = supernode_offset;
-       column < supernode_offset + supernode_size; ++column) {
-    const Int orig_column =
-        have_permutation ? ordering.inverse_permutation[column] : column;
+  for (Int column = supernode_offset; column < supernode_end; ++column) {
+    const Int orig_column = have_permutation ? ordering.inverse_permutation[column] : column;
     const Int column_beg = matrix.RowEntryOffset(orig_column);
     const Int column_end = matrix.RowEntryOffset(orig_column + 1);
 
     Buffer<Int>& structure = (*structures)[column];
 
-    // Merge all threads' children into this thread's list.
-    std::vector<Int>& children = children_list[column];
-    {
-      std::size_t num_total_children = 0;
-      for (std::size_t t = 0; t < private_children_lists->Size(); ++t) {
-        num_total_children += (*private_children_lists)[t][column].size();
-      }
-
-      const std::size_t num_local_children = children.size();
-      if (num_total_children > num_local_children) {
-        children.resize(num_total_children);
-        std::size_t offset = num_local_children;
-        for (std::size_t t = 0; t < private_children_lists->Size(); ++t) {
-          if (t == std::size_t(thread)) {
-            continue;
-          }
-          std::vector<Int>& other_children =
-              (*private_children_lists)[t][column];
-          std::copy(other_children.begin(), other_children.end(),
-                    children.begin() + offset);
-          offset += other_children.size();
-          other_children.clear();
-          other_children.shrink_to_fit();
-        }
-        CATAMARI_ASSERT(offset == num_total_children, "Invalid child offset");
-      }
-    }
+    std::vector<Int> &children = (*children_lists)[column];
     const Int num_children = children.size();
 
     Int degree = 0;
@@ -249,7 +231,9 @@ void ParallelEliminationForestAndDegreesRecursion(
     (*parents)[column] = parent;
     (*degrees)[column] = degree;
     if (parent >= 0) {
-      children_list[parent].push_back(column);
+      while (children_list_locks[parent].exchange(true, std::memory_order_acquire));
+      (*children_lists)[parent].push_back(column);
+      children_list_locks[parent].store(false, std::memory_order_release);
     }
 
     // Free the resources of this subtree.
@@ -269,38 +253,44 @@ void ParallelEliminationForestAndDegrees(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
     Buffer<Int>* parents, Buffer<Int>* degrees) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("ParallelEliminationForestAndDegrees");
+  BENCHMARK_START_TIMER_SECTION("Preparation");
   const Int num_rows = matrix.NumRows();
-  const int max_threads = get_max_num_tbb_threads();
   parents->Resize(num_rows);
   degrees->Resize(num_rows);
 
-  Buffer<Buffer<std::vector<Int>>> private_children_lists(max_threads);
+  // Use a single list of children per column that is protected by a lightweight
+  // spin lock (we don't expect much contension here).
+  std::unique_ptr<std::vector<std::atomic<bool>>> children_list_locks = std::make_unique<std::vector<std::atomic<bool>>>(num_rows);
+  BENCHMARK_START_TIMER_SECTION("Initialize locks");
+  parallel_for_range(num_rows, [&](size_t i) { atomic_init(&(*children_list_locks)[i], false); });
+  BENCHMARK_STOP_TIMER_SECTION("Initialize locks");
+  Buffer<std::vector<Int>> children_lists(num_rows);
 
   // A data structure for marking whether or not a node is in the pattern of
   // the active row of the lower-triangular factor. Each thread potentially
   // needs its own since different subtrees can have intersecting structure.
+  const int max_threads = get_max_num_tbb_threads();
   Buffer<Buffer<Int>> private_pattern_flags(max_threads);
-
   Buffer<Buffer<Int>> private_tmp_structures(max_threads);
 
   for (int t = 0; t < max_threads; ++t) {
-      private_children_lists[t].Resize(num_rows);
-      private_pattern_flags[t].Resize(num_rows, -1);
       private_tmp_structures[t].Resize(num_rows - 1);
   }
 
   const bool keep_structures = false;
   Buffer<Buffer<Int>> structures(num_rows);
 
+  BENCHMARK_STOP_TIMER_SECTION("Preparation");
+
   tbb::task_group tg;
   for (const Int root : ordering.assembly_forest.roots) {
     tg.run(
         [keep_structures, root, &matrix, &ordering, &parents, &degrees,
-         &private_children_lists, &structures, &private_pattern_flags,
+         &children_list_locks, &children_lists, &structures, &private_pattern_flags,
          &private_tmp_structures]() {
           ParallelEliminationForestAndDegreesRecursion(
               matrix, ordering, root, keep_structures, parents, degrees,
-              &private_children_lists, &structures, &private_pattern_flags,
+              *children_list_locks, &children_lists, &structures, &private_pattern_flags,
               &private_tmp_structures);
         });
   }

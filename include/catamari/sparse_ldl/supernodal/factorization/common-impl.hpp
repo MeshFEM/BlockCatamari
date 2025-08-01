@@ -84,12 +84,14 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
     BENCHMARK_SCOPED_TIMER_SECTION t2("EliminationForestAndDegrees");
 
     // Parallelize only if the specified ordering has the necessary information.
-    if (ordering_.supernode_sizes.Size() > 0) {
+    // (We need to know a preliminary assembly tree structure to parallelize;
+    // this can be obtained, e.g., from AMD).
+    if (ordering_.assembly_forest.roots.Size() > 0) {
       scalar_ldl::ParallelEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
-                                                &scalar_degrees);
+                                                      &scalar_degrees);
     } else {
       scalar_ldl::EliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
-                                              &scalar_degrees);
+                                        &scalar_degrees);
     }
   }
   CATAMARI_STOP_TIMER(profile.scalar_elimination_forest);
@@ -294,7 +296,7 @@ ConstBlasMatrixView<Int> Factorization<Field>::SupernodePermutation(
 template <class Field>
 void Factorization<Field>::InitialFactorizationSetup(
     const CoordinateMatrix<Field>& matrix) {
-  BENCHMARK_SCOPED_TIMER_SECTION timer("FormSupernodes");
+  BENCHMARK_SCOPED_TIMER_SECTION timer("InitialFactorizationSetup");
   Buffer<Int> supernode_degrees;
   FormSupernodes(matrix, &supernode_degrees);
   CATAMARI_START_TIMER(profile.initialize_factors);

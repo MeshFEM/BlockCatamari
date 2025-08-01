@@ -160,7 +160,6 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
     const Int child_degree = child_schur_complement.height;
     const Int sno = ordering.supernode_offsets[supernode];
     assert(child_degree == lower_factor->blocks[child].height && "Incorrectly sized child schur complement. Perhaps child was not processed?");
-    populateChildToParentMap(supernode, child, child_degree, ordering, lower_factor);
 
     // Number of child rows/cols that map to the parent's diagonal block.
     const Int num_child_diag_indices = ordering.assembly_forest.num_child_diag_indices[child];
@@ -241,21 +240,13 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     const auto &o = ldl.ordering_;
     const auto &af = o.assembly_forest;
     const Int child_beg = af.child_offsets[supernode];
-    const Int child_end = af.child_offsets[supernode + 1];
-    const Int num_children = child_end - child_beg;
+    const Int num_children = af.child_offsets[supernode + 1] - child_beg;
     const Int sno = o.supernode_offsets[supernode];
 
     // Output destination buffers
     BlasMatrixView<Field> lower_block      = ldl.lower_factor_->blocks[supernode];
     BlasMatrixView<Field> diagonal_block   = ldl.diagonal_factor_->blocks[supernode];
     BlasMatrixView<Field> schur_complement = schur_complements[supernode];
-
-    for (Int child_index = child_beg; child_index < child_end; ++child_index) {
-        const Int child = af.children[child_index];
-        const Int child_degree = schur_complements[child].height;
-        assert(child_degree == ldl.lower_factor_->blocks[child].height && "Incorrectly sized child schur complement. Perhaps child was not processed?");
-        populateChildToParentMap(supernode, child, child_degree, o, ldl.lower_factor_.get());
-    }
 
     const Int supernode_size = o.supernode_sizes[supernode];
     std::vector<size_t> child_j(num_children); // pointer into the child columns
@@ -415,13 +406,13 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);
 
         tbb::task_group tg(*(shared_state->tbb_ctx));
-        for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
+        for (Int child_index = 0; child_index < num_children; ++child_index) {
             const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
             tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
                     process_child(child, &result_contributions[child_index], nullptr);
             });
         }
-        process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
+        // process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
         auto status = tg.wait();
 
         // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
@@ -506,23 +497,26 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         }
     }
 
-    // Compute flop-count estimates so that we may prioritize the expensive
-    // tasks before the cheaper ones.
+    // Compute flop-count estimates
     Buffer<double> &work_estimates = work_estimates_;
     double &total_work = total_work_;
     if (work_estimates.Size() != num_supernodes) {
-        total_work = 0;
-        work_estimates.Resize(num_supernodes, 0.0); // Must be initialized!
-        for (const Int& root : ordering_.assembly_forest.roots) {
-            FillSubtreeWorkEstimates(root, ordering_.assembly_forest, *lower_factor_,
-                    &work_estimates);
-            total_work += work_estimates[root];
+        work_estimates.Resize(num_supernodes);
+        // Any postorder will do...
+        const auto &af = ordering_.assembly_forest;
+        for (Int i = 0; i < num_supernodes; ++i) {
+            const Int child_beg = af.child_offsets[i];
+            const Int child_end = af.child_offsets[i + 1];
+
+            double subtree_work = 0;
+            for (Int child_index = child_beg; child_index < child_end; ++child_index)
+                subtree_work += work_estimates[af.children[child_index]];
+            work_estimates[i] = subtree_work + IntraNodeWorkEstimate(i, *lower_factor_);
         }
 
-        // TODO: correct this and measure impact on parallelism
-        // (the work estimates are already cumulative and so the total work is
-        // just the work estimate of the root(s)).
-        // total_work = std::accumulate(work_estimates.begin(), work_estimates.end(), 0.);
+        total_work = 0;
+        for (const Int& root : ordering_.assembly_forest.roots)
+            total_work += work_estimates[root];
     }
     const double min_parallel_ratio_work = (total_work * control_.parallel_ratio_threshold) / max_threads;
     const double min_parallel_work = std::max(std::max(control_.min_parallel_threshold, min_parallel_ratio_work),
@@ -547,8 +541,18 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
     auto &cri    = ordering_.assembly_forest.child_rel_indices;
     if (cri.Size() != num_supernodes) {
+        BENCHMARK_SCOPED_TIMER_SECTION timer("Construct child-to-parent map");
         cri.Resize(num_supernodes);
         ncdi.Resize(num_supernodes);
+
+        tbb::parallel_for(tbb::blocked_range<Int>(0, num_supernodes), [&](const tbb::blocked_range<Int> &r) {
+            for (Int child = r.begin(); child < r.end(); ++child) {
+                const Int parent = ordering_.assembly_forest.parents[child];
+                if (parent < 0) continue; // Skip roots
+                const Int child_degree = lower_factor_->blocks[child].height;
+                populateChildToParentMap(parent, child, child_degree, ordering_, lower_factor_.get());
+            }
+        });
     }
 
     RightLookingSharedState<Field> &shared_state = shared_state_;
@@ -642,6 +646,9 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         if (dynamic_reg_params.enabled)
             MergeDynamicRegularizations(result_contributions, &result);
     }
+
+    // cri.Resize(0);
+    // ncdi.Resize(0);
 
     return result;
 }

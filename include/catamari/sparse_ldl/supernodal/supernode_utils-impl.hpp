@@ -617,23 +617,33 @@ void ParallelFillStructureIndicesRecursion(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
     const Buffer<Int>& supernode_member_to_index, Int root,
     LowerFactor<Field>* lower_factor,
-    Buffer<Buffer<Int>>* private_pattern_flags) {
+    Buffer<Buffer<Int>>* private_pattern_flags, Int depth) {
   const Int child_beg = ordering.assembly_forest.child_offsets[root];
   const Int child_end = ordering.assembly_forest.child_offsets[root + 1];
-  tbb::task_group tg;
-  for (Int child_index = child_beg; child_index < child_end; ++child_index) {
-    const Int child = ordering.assembly_forest.children[child_index];
-    tg.run([child, &matrix, &ordering, &supernode_member_to_index,
-            &lower_factor, &private_pattern_flags]() {
-      ParallelFillStructureIndicesRecursion(
-          matrix, ordering, supernode_member_to_index, child, lower_factor,
-          private_pattern_flags);
-    });
+  if (depth > 7) { // Avoid excessive TBB overhead by processing lower-down subtrees serially.
+      for (Int child_index = child_beg; child_index < child_end; ++child_index) {
+          ParallelFillStructureIndicesRecursion(
+                  matrix, ordering, supernode_member_to_index, ordering.assembly_forest.children[child_index],
+                  lower_factor, private_pattern_flags, depth + 1);
+      }
   }
-  tg.wait();
+  else {
+      tbb::task_group tg;
+      for (Int child_index = child_beg; child_index < child_end; ++child_index) {
+        const Int child = ordering.assembly_forest.children[child_index];
+        tg.run([child, &matrix, &ordering, &supernode_member_to_index,
+                &lower_factor, &private_pattern_flags, depth]() {
+          ParallelFillStructureIndicesRecursion(
+              matrix, ordering, supernode_member_to_index, child, lower_factor,
+              private_pattern_flags, depth + 1);
+        });
+      }
+      tg.wait();
+  }
 
   const int thread = tbb::this_task_arena::current_thread_index();
   Buffer<Int>& pattern_flags = (*private_pattern_flags)[thread];
+  if (pattern_flags.Size() == 0) pattern_flags.Resize(matrix.NumRows(), -1);
 
   // Form this node's structure by unioning that of its direct children
   // (removing portions that intersect this supernode).
@@ -704,10 +714,8 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
   // A data structure for marking whether or not a node is in the pattern of
   // the active row of the lower-triangular factor. Each thread potentially
   // needs its own since different subtrees can have intersecting structure.
+  // (These are allocated on demand in parallel...)
   Buffer<Buffer<Int>> private_pattern_flags(max_threads);
-
-  for (int t = 0; t < max_threads; ++t)
-    private_pattern_flags[t].Resize(num_rows, -1);
 
   tbb::task_group tg;
   for (const Int root : ordering.assembly_forest.roots) {
@@ -715,7 +723,7 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
             &lower_factor, &private_pattern_flags]() {
       ParallelFillStructureIndicesRecursion(
           matrix, ordering, supernode_member_to_index, root, lower_factor,
-          &private_pattern_flags);
+          &private_pattern_flags, 0);
     });
   }
   tg.wait();
@@ -726,6 +734,16 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
     std::sort(lower_factor->StructureBeg(s),
               lower_factor->StructureEnd(s));
   }, sort_grain_size, 2 * sort_grain_size);
+}
+
+template <class Field>
+Int IntraNodeWorkEstimate(Int supernode, const LowerFactor<Field>& lower_factor) {
+  const ConstBlasMatrixView<Field> &lower_block = lower_factor.blocks[supernode].ToConst();
+  const Int s = lower_block.width;  // supernode size
+  const Int d = lower_block.height; // degree
+  return s * s * s / 3.  // Factor diagonal block: s^3 / 3
+       + s * s * d       // Solve against diagonal block: s^2 d
+       + d * d * s;      // Schur complement update outer products: d^2 s
 }
 
 template <class Field>
@@ -743,13 +761,7 @@ void FillSubtreeWorkEstimates(Int root, const AssemblyForest& supernode_forest,
     (*work_estimates)[root] += (*work_estimates)[child];
   }
 
-  const ConstBlasMatrixView<Field>& lower_block =
-      lower_factor.blocks[root].ToConst();
-  const Int s = lower_block.width;  // supernode size
-  const Int d = lower_block.height; // degree
-  (*work_estimates)[root] += s * s * s / 3.; // Factor diagonal block: s^3 / 3
-  (*work_estimates)[root] += s * s * d;      // Solve against diagonal block: s^2 d
-  (*work_estimates)[root] += d * d * s;      // Schur complement update outer products: d^2 s
+  (*work_estimates)[root] += IntraNodeWorkEstimate(root, lower_factor);
 }
 
 template <class Field>
