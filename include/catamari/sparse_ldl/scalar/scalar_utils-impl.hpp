@@ -117,7 +117,7 @@ void ParallelEliminationForestAndDegreesRecursion(
   const Int order_child_beg = ordering.assembly_forest.child_offsets[root];
   const Int order_child_end = ordering.assembly_forest.child_offsets[root + 1];
 
-  if (depth < 9) {
+  if (depth < 7 && (order_child_end > order_child_beg + 1)) {
       tbb::task_group tg;
       for (Int index = order_child_beg; index < order_child_end; ++index) {
         const Int child = ordering.assembly_forest.children[index];
