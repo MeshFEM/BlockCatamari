@@ -1,5 +1,5 @@
 [wrap-git]
 directory = quotient
 url = https://github.com/MeshFEM/quotient
-revision = 06791450cd42097b212ae238ab5d2d045ca55a87
+revision = 47827fb7892ef8425c0102feb9c0cb96b0f2801b
 clone-recursive = true

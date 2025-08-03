@@ -475,6 +475,7 @@ inline void RelaxSupernodes(const SymmetricOrdering& orig_ordering,
     // supernode.
     Buffer<Int> num_zeros(num_supernodes, 0);
 
+    // BENCHMARK_SCOPED_TIMER_SECTION tiemr("MergeChildren");
     for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
       MergeChildren(supernode, orig_ordering.supernode_offsets,
                     orig_ordering.supernode_sizes, orig_supernode_degrees,
@@ -617,10 +618,10 @@ void ParallelFillStructureIndicesRecursion(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
     const Buffer<Int>& supernode_member_to_index, Int root,
     LowerFactor<Field>* lower_factor,
-    Buffer<Buffer<Int>>* private_pattern_flags, Int depth) {
+    Buffer_mimalloc<Buffer_mimalloc<Int>>* private_pattern_flags, Int depth) {
   const Int child_beg = ordering.assembly_forest.child_offsets[root];
   const Int child_end = ordering.assembly_forest.child_offsets[root + 1];
-  if (depth > 7) { // Avoid excessive TBB overhead by processing lower-down subtrees serially.
+  if (depth > 8) { // Avoid excessive TBB overhead by processing lower-down subtrees serially.
       for (Int child_index = child_beg; child_index < child_end; ++child_index) {
           ParallelFillStructureIndicesRecursion(
                   matrix, ordering, supernode_member_to_index, ordering.assembly_forest.children[child_index],
@@ -642,7 +643,7 @@ void ParallelFillStructureIndicesRecursion(
   }
 
   const int thread = tbb::this_task_arena::current_thread_index();
-  Buffer<Int>& pattern_flags = (*private_pattern_flags)[thread];
+  auto &pattern_flags = (*private_pattern_flags)[thread];
   if (pattern_flags.Size() == 0) pattern_flags.Resize(matrix.NumRows(), -1);
 
   // Form this node's structure by unioning that of its direct children
@@ -715,7 +716,7 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
   // the active row of the lower-triangular factor. Each thread potentially
   // needs its own since different subtrees can have intersecting structure.
   // (These are allocated on demand in parallel...)
-  Buffer<Buffer<Int>> private_pattern_flags(max_threads);
+  Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags(max_threads);
 
   tbb::task_group tg;
   for (const Int root : ordering.assembly_forest.roots) {

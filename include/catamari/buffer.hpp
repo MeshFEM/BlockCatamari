@@ -9,10 +9,14 @@
 #define CATAMARI_BUFFER_H_
 
 #include "quotient/buffer.hpp"
+#include <mimalloc.h>
 
 namespace catamari {
 
 using quotient::Buffer;
+
+template<typename T>
+using Buffer_mimalloc = Buffer<T, mi_stl_allocator<T>>;
 
 }  // namespace catamari
 
