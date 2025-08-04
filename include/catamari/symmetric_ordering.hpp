@@ -34,7 +34,8 @@ struct AssemblyForest {
   Buffer<Int> roots;
 
   // Julian Panetta: mapping from each child structure to its parent front.
-  mutable Buffer<Buffer<Int>> child_rel_indices;
+  mutable Buffer<Int> child_rel_indices_offsets;
+  mutable Buffer<Int> child_rel_indices;
   mutable Buffer<Int> num_child_diag_indices;
 
   // Julian Panetta: support for running left-looking factorization on just a subtree.

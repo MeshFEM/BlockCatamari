@@ -165,7 +165,7 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
     const Int num_child_diag_indices = ordering.assembly_forest.num_child_diag_indices[child];
 
     // Locations of child's rows/cols relative to the parent front's upper-left corner
-    const Buffer<Int> &child_rel_indices = ordering.assembly_forest.child_rel_indices[child];
+    const Int *child_rel_indices = ordering.assembly_forest.child_rel_indices.Data() + ordering.assembly_forest.child_rel_indices_offsets[child];
 
     const Int supernode_size = ordering.supernode_sizes[supernode];
 
@@ -261,12 +261,12 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
 
             const Int child = af.children[child_beg + ci];
             const Int num_child_diag_indices = af.num_child_diag_indices[child];
-            const Buffer<Int> &child_rel_indices = af.child_rel_indices[child];
+            const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+            const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
 
-            if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != j) continue;
+            if (cj >= child_degree || child_rel_indices[cj] != j) continue;
 
             const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
-            const Int child_degree = child_schur_complement.height;
             const Field* child_column = child_schur_complement.Pointer(0, cj);
 
             for (Int i = cj; i < child_degree; i += BlockSize) {
@@ -288,12 +288,12 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             Int cj = child_j[ci];
 
             const Int child = af.children[child_beg + ci];
-            const Buffer<Int> &child_rel_indices = af.child_rel_indices[child];
+            const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+            const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
 
-            if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != front_j) continue;
+            if (cj >= child_degree || child_rel_indices[cj] != front_j) continue;
 
             const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
-            const Int child_degree = child_schur_complement.height;
 
             const Field* child_column = child_schur_complement.Pointer(0, cj);
             for (Int i = cj; i < child_degree; i += BlockSize) {
@@ -537,23 +537,8 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     }
 #endif
 
-    // Allocate the map from child structures to parent fronts.
-    auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
-    auto &cri    = ordering_.assembly_forest.child_rel_indices;
-    if (cri.Size() != num_supernodes) {
-        BENCHMARK_SCOPED_TIMER_SECTION timer("Construct child-to-parent map");
-        cri.Resize(num_supernodes);
-        ncdi.Resize(num_supernodes);
-
-        tbb::parallel_for(tbb::blocked_range<Int>(0, num_supernodes), [&](const tbb::blocked_range<Int> &r) {
-            for (Int child = r.begin(); child < r.end(); ++child) {
-                const Int parent = ordering_.assembly_forest.parents[child];
-                if (parent < 0) continue; // Skip roots
-                const Int child_degree = lower_factor_->blocks[child].height;
-                populateChildToParentMap(parent, child, child_degree, ordering_, lower_factor_.get());
-            }
-        });
-    }
+    // Construct the map from child structures to parent fronts.
+    constructChildToParentMap(ordering_, lower_factor_.get());
 
     RightLookingSharedState<Field> &shared_state = shared_state_;
     if (shared_state.schur_complements.Size() != num_supernodes) {
@@ -646,9 +631,6 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         if (dynamic_reg_params.enabled)
             MergeDynamicRegularizations(result_contributions, &result);
     }
-
-    // cri.Resize(0);
-    // ncdi.Resize(0);
 
     return result;
 }

@@ -1032,13 +1032,43 @@ void UpdateSubdiagonalBlock(
     }
   }
 }
+template <class Field>
+void constructChildToParentMap(const SymmetricOrdering& ordering,
+                               const LowerFactor<Field> *lower_factor) {
+    const Int num_supernodes = ordering.supernode_sizes.Size();
+    auto &ncdi = ordering.assembly_forest.num_child_diag_indices;
+    auto &crio = ordering.assembly_forest.child_rel_indices_offsets;
+    auto &cri  = ordering.assembly_forest.child_rel_indices;
+
+    if (ncdi.Size() == num_supernodes) return;
+
+    BENCHMARK_SCOPED_TIMER_SECTION timer("Construct child-to-parent map");
+    ncdi.Resize(num_supernodes);
+    crio.Resize(num_supernodes + 1);
+
+    crio[0] = 0;
+    for (Int s = 0; s < num_supernodes; ++s) {
+        Int degree = lower_factor->blocks[s].height;
+        crio[s + 1] = crio[s] + degree;
+    }
+
+    cri.Resize(crio[num_supernodes]);
+
+    tbb::parallel_for(tbb::blocked_range<Int>(0, num_supernodes), [&](const tbb::blocked_range<Int> &r) {
+        for (Int child = r.begin(); child < r.end(); ++child) {
+            const Int parent = ordering.assembly_forest.parents[child];
+            if (parent < 0) continue; // Skip roots
+            const Int child_degree = lower_factor->blocks[child].height;
+            populateChildToParentMap(parent, child, child_degree, ordering, lower_factor);
+        }
+    });
+}
 
 template <class Field>
 void populateChildToParentMap(Int supernode, Int child, Int child_degree,
                               const SymmetricOrdering& ordering,
                               const LowerFactor<Field> *lower_factor) {
-    auto &child_rel_indices = ordering.assembly_forest.child_rel_indices[child]; // locations of child rows/cols relative to the parent front's upper-left corner
-    if (child_rel_indices.Size() == child_degree) return;
+    Int *child_rel_indices = ordering.assembly_forest.child_rel_indices.Data() + ordering.assembly_forest.child_rel_indices_offsets[child];
 
     const Int supernode_size = ordering.supernode_sizes[supernode];
     const Int supernode_start = ordering.supernode_offsets[supernode];
@@ -1047,7 +1077,6 @@ void populateChildToParentMap(Int supernode, Int child, Int child_degree,
     Int &num_child_diag_indices = ordering.assembly_forest.num_child_diag_indices[child];
     const Int* parent_indices = lower_factor->StructureBeg(supernode);
     // Fill the mapping from the child structure into the parent front.
-    child_rel_indices.Resize(child_degree);
     num_child_diag_indices = 0;
 
     const Int* child_indices = lower_factor->StructureBeg(child);

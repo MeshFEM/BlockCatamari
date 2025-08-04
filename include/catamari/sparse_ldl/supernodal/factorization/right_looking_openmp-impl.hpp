@@ -188,13 +188,12 @@ void MergeChildSchurComplement(Int supernode, Int child,
                                bool first_merge) {
     const Int child_degree = child_schur_complement.height;
     const Int sno = ordering.supernode_offsets[supernode];
-    populateChildToParentMap(supernode, child, child_degree, ordering, lower_factor);
 
     // Number of child rows/cols that map to the parent's diagonal block.
     const Int num_child_diag_indices = ordering.assembly_forest.num_child_diag_indices[child];
 
     // Locations of child's rows/cols relative to the parent front's upper-left corner
-    const Buffer<Int> &child_rel_indices = ordering.assembly_forest.child_rel_indices[child];
+    const Int *child_rel_indices = ordering.assembly_forest.child_rel_indices.Data() + ordering.assembly_forest.child_rel_indices_offsets[child];
 
     const Int supernode_size = ordering.supernode_sizes[supernode];
 
@@ -206,7 +205,7 @@ void MergeChildSchurComplement(Int supernode, Int child,
             ldl.InitializeFactorColumn(sno + j, j, diagonal_block);
             Field* factor_column = diagonal_block.Pointer(0, j);
 
-            if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != j) continue;
+            if (cj >= child_degree || child_rel_indices[cj] != j) continue;
 
             const Field* child_column = child_schur_complement.Pointer(0, cj);
             factor_column[j] += child_column[cj]; // diagonal entry
@@ -283,12 +282,6 @@ void MergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     BlasMatrixView<Field> diagonal_block   = ldl.diagonal_factor_->blocks[supernode];
     BlasMatrixView<Field> schur_complement = schur_complements[supernode];
 
-    for (Int child_index = child_beg; child_index < child_end; ++child_index) {
-        const Int child = af.children[child_index];
-        const Int child_degree = schur_complements[child].height;
-        populateChildToParentMap(supernode, child, child_degree, o, ldl.lower_factor_.get());
-    }
-
     const Int supernode_size = o.supernode_sizes[supernode];
     std::vector<size_t> child_j(num_children); // pointer into the child columns
     const Int factor_height = diagonal_block.Height() + lower_block.Height();
@@ -304,7 +297,8 @@ void MergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
 
             const Int child = af.children[child_beg + ci];
             const Int num_child_diag_indices = af.num_child_diag_indices[child];
-            const Buffer<Int> &child_rel_indices = af.child_rel_indices[child];
+            const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+            const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
 
             // Note: if we merge columns in parallel, we cannot use the `cj` pointer
             // and instead have to search for the current column `j` in child_rel_indices.
@@ -312,10 +306,9 @@ void MergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             //      auto it = std::find(child_rel_indices.begin(), end, j);
             //      if (it == end) continue;
             //      const Int cj = std::distance(child_rel_indices.begin(), it);
-            if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != j) continue;
+            if (cj >= child_degree || child_rel_indices[cj] != j) continue;
 
             const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
-            const Int child_degree = child_schur_complement.height;
             const Field* child_column = child_schur_complement.Pointer(0, cj);
 
             factor_column[j] += child_column[cj]; // diagonal entry
@@ -339,16 +332,16 @@ void MergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
 
             const Int child = af.children[child_beg + ci];
             const Int num_child_diag_indices = af.num_child_diag_indices[child];
-            const Buffer<Int> &child_rel_indices = af.child_rel_indices[child];
+            const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+            const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
 
             // auto it = std::lower_bound(child_rel_indices.begin() + num_child_diag_indices, child_rel_indices.end(), front_j);
             // if (it == child_rel_indices.end() || *it != front_j) continue;
             // Int cj = std::distance(child_rel_indices.begin(), it);
 
-            if (cj >= child_rel_indices.Size() || child_rel_indices[cj] != front_j) continue;
+            if (cj >= child_degree || child_rel_indices[cj] != front_j) continue;
 
             const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
-            const Int child_degree = child_schur_complement.height;
 
             const Field* child_column = child_schur_complement.Pointer(0, cj);
             for (Int i = cj; i < child_degree; ++i)
@@ -623,13 +616,8 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
   const double min_parallel_work = std::max(std::max(control_.min_parallel_threshold, min_parallel_ratio_work),
                                             max_threads < 2 ? std::numeric_limits<double>::infinity() : 0); // Forbid parallel execution
 
-  // Allocate the map from child structures to parent fronts.
-  auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
-  auto &cri    = ordering_.assembly_forest.child_rel_indices;
-  if ( cri.Size() != num_supernodes) {
-      cri.Resize(num_supernodes);
-      ncdi.Resize(num_supernodes);
-  }
+  // Construct the map from child structures to parent fronts.
+  constructChildToParentMap(ordering_, lower_factor_.get());
 
   RightLookingSharedState<Field> &shared_state = shared_state_;
   if (shared_state.schur_complements.Size() != num_supernodes) {

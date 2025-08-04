@@ -127,10 +127,10 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     const Int* child_indices = lower_factor_->StructureBeg(child);
     BlasMatrixView<Field>& child_right_hand_sides = shared_state->schur_complements[child];
     const Int child_degree = child_right_hand_sides.height;
-    populateChildToParentMap(supernode, child, child_degree, ordering_, lower_factor_.get()); // In case it wasn't populated during the factorization (e.g., for left-looking)
+    assert(child_degree == ordering_.assembly_forest.child_rel_indices_offsets[child + 1] - ordering_.assembly_forest.child_rel_indices_offsets[child]);
 
-    const Int &num_child_diag_indices    = ordering_.assembly_forest.num_child_diag_indices[child];
-    const Buffer<Int> &child_rel_indices = ordering_.assembly_forest.child_rel_indices[child];
+    const Int &num_child_diag_indices = ordering_.assembly_forest.num_child_diag_indices[child];
+    const Int *child_rel_indices      = ordering_.assembly_forest.child_rel_indices.Data() + ordering_.assembly_forest.child_rel_indices_offsets[child];
 
 #if 1
     for (Int j = 0; j < num_rhs; ++j) {
@@ -176,14 +176,8 @@ void Factorization<Field>::OpenMPLowerTriangularSolve(
     SolveSharedState* shared_state) const {
   BENCHMARK_SCOPED_TIMER_SECTION timer("OpenMPLowerTriangularSolve");
 
-  // Allocate the map from child structures to parent fronts (in case it wasn't populated during the factorization (e.g., for left-looking))
-  const Int num_supernodes = ordering_.supernode_sizes.Size();
-  auto &ncdi   = ordering_.assembly_forest.num_child_diag_indices;
-  auto &cri    = ordering_.assembly_forest.child_rel_indices;
-  if (cri.Size() != num_supernodes) {
-      cri.Resize(num_supernodes);
-      ncdi.Resize(num_supernodes);
-  }
+  // Construct the map from child structures to parent fronts (in case it wasn't populated during the factorization (e.g., for left-looking))
+  constructChildToParentMap(ordering_, lower_factor_.get());
 
   // Recurse on each tree in the elimination forest.
 #if 1
