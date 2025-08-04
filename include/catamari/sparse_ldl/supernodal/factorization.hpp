@@ -287,7 +287,8 @@ class Factorization {
  public:
 #ifdef CATAMARI_ENABLE_TIMERS
   FactorizationProfile profile;
-#endif  // ifdef CATAMARI_ENABLE_TIMERS
+#endif
+
   using SolveSharedState = RightLookingSharedState<Field, FineGrainedTimersSolve>;
 
   // Factors the given matrix using the prescribed permutation.
@@ -731,11 +732,12 @@ private:
   // Julian Panetta: cache work estimates
   Buffer<double> work_estimates_;
   double total_work_;
-  mutable Buffer<Field> permute_scratch_;
-  mutable SolveSharedState solve_shared_state_;
 
   // Julian Panetta: cache right-looking factorization shared state
   RightLookingSharedState<Field> shared_state_;
+
+  mutable Buffer<Field> permute_scratch_;
+  mutable SolveSharedState solve_shared_state_;
 
   // Performs the initial analysis (and factorization initialization) for a
   // particular sparsity pattern. Subsequent factorizations with the same
@@ -781,7 +783,6 @@ private:
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
       const Buffer<double>& work_estimates, double min_parallel_work,
       RightLookingSharedState<Field>* shared_state,
-      Buffer<PrivateState<Field>>* private_states,
       SparseLDLResult<Field>* result,
       SchurComplementStorage<Field> *subtreeStorage = nullptr);
 
@@ -808,7 +809,6 @@ private:
       Int supernode,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
       RightLookingSharedState<Field>* shared_state,
-      Buffer<PrivateState<Field>>* private_state,
       SparseLDLResult<Field>* result);
   bool LeftLookingSupernodeFinalize(
       Int main_supernode,

@@ -36,7 +36,6 @@ template <Int BlockSize>
 bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
                 Int supernode, const DynamicRegularizationParams<Field>& dynamic_reg_params,
                 RightLookingSharedState<Field>* shared_state,
-                Buffer<PrivateState<Field>>* private_states,
                 SparseLDLResult<Field>* result)
 {
     typedef ComplexBase<Field> Real;
@@ -313,7 +312,6 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         const DynamicRegularizationParams<Field>& dynamic_reg_params,
         const Buffer<double>& work_estimates, double min_parallel_work,
         RightLookingSharedState<Field>* shared_state,
-        Buffer<PrivateState<Field>>* private_states,
         SparseLDLResult<Field>* result,
         SchurComplementStorage<Field> *subtreeStorage) {
 
@@ -328,14 +326,14 @@ bool Factorization<Field>::BlockRightLookingSubtree(
     const double work_estimate = work_estimates[supernode];
     const bool parallel = (work_estimate >= min_parallel_work) && (num_children > 1);
 
-    auto process_child = [&, supernode, min_parallel_work, shared_state, private_states](Int child, SparseLDLResult<Field> *resultContrib, SchurComplementStorage<Field> *stack) {
+    auto process_child = [&, supernode, min_parallel_work, shared_state](Int child, SparseLDLResult<Field> *resultContrib, SchurComplementStorage<Field> *stack) {
         const Int child_offset = ordering_.supernode_offsets[child];
         DynamicRegularizationParams<Field> subparams = dynamic_reg_params;
         subparams.offset = child_offset;
         if (shared_state->hasFailed()) return; // Stop immediately if another thread encountered a failure!
         bool success = BlockRightLookingSubtree<BlockSize>(
                 child, subparams, work_estimates, min_parallel_work,
-                shared_state, private_states, resultContrib, stack);
+                shared_state, resultContrib, stack);
         if (!success) {
             shared_state->setFailed();
             if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
@@ -459,7 +457,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
 
     if (shared_state->hasFailed()) return false;
 
-    return BlockRightLookingSupernodeFinalize<BlockSize>(supernode, dynamic_reg_params, shared_state, private_states, result);
+    return BlockRightLookingSupernodeFinalize<BlockSize>(supernode, dynamic_reg_params, shared_state, result);
 }
 
 template <class Field>
@@ -489,13 +487,6 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
 
     const Int max_threads = get_max_num_tbb_threads();
     shared_state_.num_tbb_threads = max_threads;
-    Buffer<PrivateState<Field>> private_states(max_threads);
-    if (control_.factorization_type != kCholeskyFactorization) {
-        const Int workspace_size = max_lower_block_size_;
-        for (int t = 0; t < max_threads; ++t) {
-            private_states[t].scaled_transpose_buffer.Resize(workspace_size);
-        }
-    }
 
     // Compute flop-count estimates
     Buffer<double> &work_estimates = work_estimates_;
@@ -592,7 +583,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         subparams.offset = ordering_.supernode_offsets[root];
         bool success = BlockRightLookingSubtree<BlockSize>(
                 root, subparams, work_estimates, min_parallel_work,
-                &shared_state, &private_states, &result_contributions[root_index]);
+                &shared_state, &result_contributions[root_index]);
         FG_START_TIMER(shared_state.finegrained_timers, root, Deallocation);
         shared_state.schur_complement_storage[root].deallocate();
         FG_STOP_TIMER(shared_state.finegrained_timers, root, Deallocation);
