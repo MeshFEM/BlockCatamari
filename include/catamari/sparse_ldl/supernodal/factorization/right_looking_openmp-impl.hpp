@@ -586,7 +586,7 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
                                                : &ordering_.inverse_permutation;
 
   // const Int max_threads = omp_get_max_threads();
-  const Int max_threads = get_max_num_tbb_threads();
+  const Int max_threads = tbb::this_task_arena::max_concurrency(); // WARNING: get_max_num_tbb_threads() leads to a crash due to noncontiguous thread indices after repeated calls to `set_max_num_tbb_threads`...
   Buffer<PrivateState<Field>> private_states(max_threads);
   if (control_.factorization_type != kCholeskyFactorization) {
     const Int workspace_size = max_lower_block_size_;

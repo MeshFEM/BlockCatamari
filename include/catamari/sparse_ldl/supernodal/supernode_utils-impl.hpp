@@ -710,13 +710,12 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
                                   LowerFactor<Field>* lower_factor,
                                   int sort_grain_size = 500) {
   const Int num_rows = matrix.NumRows();
-  const int max_threads = get_max_num_tbb_threads();
 
   // A data structure for marking whether or not a node is in the pattern of
   // the active row of the lower-triangular factor. Each thread potentially
   // needs its own since different subtrees can have intersecting structure.
   // (These are allocated on demand in parallel...)
-  Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags(max_threads);
+  Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags(tbb::this_task_arena::max_concurrency()); // WARNING: get_max_num_tbb_threads() leads to a crash due to noncontiguous thread indices after repeated calls to `set_max_num_tbb_threads`...
 
   tbb::task_group tg;
   for (const Int root : ordering.assembly_forest.roots) {

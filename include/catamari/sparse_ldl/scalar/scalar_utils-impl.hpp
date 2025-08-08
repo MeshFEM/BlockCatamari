@@ -300,7 +300,8 @@ void ParallelEliminationForestAndDegrees(
   // A data structure for marking whether or not a node is in the pattern of
   // the active row of the lower-triangular factor. Each thread potentially
   // needs its own since different subtrees can have intersecting structure.
-  const int max_threads = get_max_num_tbb_threads();
+  // WARNING: get_max_num_tbb_threads() leads to a crash due to noncontiguous thread indices after repeated calls to `set_max_num_tbb_threads`...
+  const int max_threads = tbb::this_task_arena::max_concurrency();
   Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags(max_threads);
   Buffer_mimalloc<Buffer_mimalloc<Int>> private_tmp_structures(max_threads);
 

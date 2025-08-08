@@ -67,6 +67,8 @@ void Factorization<Field>::MergeContribution(
 template <class Field>
 void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
                                           Buffer<Int>* supernode_degrees) {
+  const int max_threads = get_max_num_tbb_threads();
+
   BENCHMARK_SCOPED_TIMER_SECTION timer("FormSupernodes");
   CATAMARI_START_TIMER(profile.scalar_elimination_forest);
   Buffer<Int> scalar_parents;
@@ -86,7 +88,7 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
     // Parallelize only if the specified ordering has the necessary information.
     // (We need to know a preliminary assembly tree structure to parallelize;
     // this can be obtained, e.g., from AMD).
-    if (ordering_.assembly_forest.roots.Size() > 0) {
+    if ((max_threads > 1) && (ordering_.assembly_forest.roots.Size() > 0)) {
       scalar_ldl::ParallelEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
                                                       &scalar_degrees);
     } else {
@@ -213,9 +215,15 @@ void Factorization<Field>::InitializeFactors(
       *std::max_element(supernode_degrees.begin(), supernode_degrees.end());
 
   {
-    BENCHMARK_SCOPED_TIMER_SECTION t2("ParallelFillStructureIndices");
-    ParallelFillStructureIndices(matrix, ordering_, supernode_member_to_index_,
-                         lower_factor_.get());
+    if (get_max_num_tbb_threads() > 1) {
+      BENCHMARK_SCOPED_TIMER_SECTION t2("ParallelFillStructureIndices");
+      ParallelFillStructureIndices(matrix, ordering_, supernode_member_to_index_,
+                           lower_factor_.get());
+    } else {
+      BENCHMARK_SCOPED_TIMER_SECTION t2("FillStructureIndices");
+      FillStructureIndices(matrix, ordering_, supernode_member_to_index_,
+                           lower_factor_.get());
+    }
   }
   if (control_.algorithm == kLeftLookingLDL) {
     lower_factor_->FillIntersectionSizes(ordering_.supernode_sizes,
