@@ -31,6 +31,17 @@ namespace catamari {
 // Sparse record for each (source) input matrix entry of its
 // destination in factor_values_.
 // This is stored in a compressed-sparse-column-type format.
+//
+// For "block conversion plans", each { dst, src } pair corresponds to an
+// `N x N` block stored contiguously at offset `src` in the source matrix data.
+// The tricky part is that this block needs to be transposed conditionally
+// based on whether it originated from the upper or lower triangle.
+// (Blocks originating from the lower triangle or diagonal are transposed;
+//  strict upper triangle blocks are not.)
+// We therefore use two buckets of entries per column in the block plan:
+// the first stores the entries corresponding to transposed blocks (lower tri),
+// and the second stores entries for blocks not requiring transposition (strict upper tri).
+// The first bucket for column `j` begins at `2 * j` and the second at `2 * j + 1`.
 struct ConversionPlan {
     // Destination and source of each input matrix entry appearing in the factor.
     // Crucially does no value initialization, unlike std::pair!
@@ -42,9 +53,16 @@ struct ConversionPlan {
 
     const Entry *entries() const { return m_entries.Data(); }
           Entry *entries()       { return m_entries.Data(); }
-    const Entry *columnData(int j) const { return entries() + columnOffsets[j]; }
+
+    // non-block conversion interface
+    const Entry *columnData(int j) const { assert(!isBlock); return entries() + columnOffsets[j]; }
+
+    // block conversion interface
+    const Entry *columnDataBegin(int j, bool upperTri) const { assert(isBlock); return entries() + columnOffsets[2 * j + upperTri]; }
+    const Entry *columnDataEnd  (int j, bool upperTri) const { assert(isBlock); return entries() + columnOffsets[2 * j + upperTri + 1]; }
 
     Eigen::Array<Int, Eigen::Dynamic, 1> columnOffsets;
+    bool isBlock = false;
 private:
     Buffer<Entry> m_entries;
 };
@@ -362,6 +380,75 @@ class Factorization {
             factorVals[e->dst] = Ax[e->src];
       }
     }
+
+    // Inject the entries for (scalar) columns jbegin...jend - 1
+    template<Int BlockSize>
+    void injectEntriesBlockCPlan(Int jbegin, Int jend, Field *factorVals, const Int dst_leading_dim) {
+        // Fall back to individual scalar injection if we don't actually have a block conversion plan.
+        if (!cplan->isBlock) { return injectEntries(jbegin, jend, factorVals); }
+        assert((jbegin % BlockSize == 0) && (jend % BlockSize == 0));
+        jbegin /= BlockSize;
+        jend   /= BlockSize;
+        if (Bx) {
+            // Proceed one block column at a time.
+            for (Int j = jbegin; j < jend; ++j) {
+                { // Blocks sourced from the lower triangle (transpose)
+                    const ConversionPlan::Entry *begin = cplan->columnDataBegin(j, false);
+                    const ConversionPlan::Entry *end   = cplan->columnDataEnd  (j, false);
+                    for (const ConversionPlan::Entry *e = begin; e < end; ++e) {
+                        Field *dst = factorVals + e->dst;
+                        Int src_offset = e->src;
+                        for (Int cj = 0; cj < BlockSize; ++cj) {
+                            for (Int ci = 0; ci < BlockSize; ++ci)
+                                dst[ci] = Ax[src_offset + ci * BlockSize + cj] + sigma * Bx[src_offset + ci * BlockSize + cj];
+                            dst += dst_leading_dim;
+                        }
+                    }
+                }
+                { // Blocks sourced from the strict upper triangle (no transpose)
+                    const ConversionPlan::Entry *begin = cplan->columnDataBegin(j, true);
+                    const ConversionPlan::Entry *end   = cplan->columnDataEnd  (j, true);
+                    for (const ConversionPlan::Entry *e = begin; e < end; ++e) {
+                        Field *dst = factorVals + e->dst;
+                        Int src_offset = e->src;
+                        for (Int cj = 0; cj < BlockSize; ++cj) {
+                            for (Int ci = 0; ci < BlockSize; ++ci)
+                                dst[ci] = Ax[src_offset + cj * BlockSize + ci] + sigma * Bx[src_offset + cj * BlockSize + ci];
+                            dst += dst_leading_dim;
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            // Proceed one block column at a time.
+            const Int *columnOffsetPtr = cplan->columnOffsets.data() + 2 * jbegin;
+            const ConversionPlan::Entry *base = cplan->entries(), *begin, *end;
+            for (Int j = jbegin; j < jend; ++j) {
+                // Blocks sourced from the lower triangle (transpose)
+                begin = base + *(columnOffsetPtr++);
+                end   = base + *(columnOffsetPtr++);
+                for (const ConversionPlan::Entry *e = begin; e < end; ++e) {
+                    copyBlockContiguousSrcTranspose<BlockSize>(Ax + e->src, factorVals + e->dst, dst_leading_dim);
+                    // Field *dst = factorVals + e->dst;
+                    // const Int base_src_offset = e->src;
+                    // for (Int cj = 0; cj < BlockSize; ++cj) {
+                    //     Int src_offset = base_src_offset + cj;
+                    //     for (Int ci = 0; ci < BlockSize; ++ci) {
+                    //         dst[ci] = Ax[src_offset];
+                    //         src_offset += BlockSize;
+                    //     }
+                    //     dst += dst_leading_dim;
+                    // }
+                }
+                // Blocks sourced from the strict upper triangle (no transpose)
+                begin = end;
+                end = base + *columnOffsetPtr;
+                for (const ConversionPlan::Entry *e = begin; e < end; ++e)
+                    copyBlockContiguousSrc<BlockSize>(Ax + e->src, factorVals + e->dst, dst_leading_dim);
+            }
+        }
+    }
   };
   MatrixData m_inputData;
 
@@ -401,6 +488,41 @@ class Factorization {
       FillZerosLowerTriangular(diagonal_block.data, diagonal_block.width, diagonal_block.leading_dim);
 
       m_inputData.injectEntries(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
+      if (m_inputData.sigma != 0) {
+          for (Int c = 0; c < supernode_size; ++c)
+              diagonal_block(c, c) += m_inputData.sigma;
+      }
+  }
+
+  // Versions using a block conversion plan.
+  template<Int BlockSize>
+  void BlockCPlanInitializeFactorBlockColumn(Int j, Int local_j, BlasMatrixView<Field> &diagonal_block) {
+      // Zero out this block column
+      FillZerosLowerTriangularMiddleCols(diagonal_block.data, local_j, local_j + BlockSize, diagonal_block.leading_dim);
+
+      m_inputData.template injectEntriesBlockCPlan<BlockSize>(j, j + BlockSize, factor_values_.Data(), diagonal_block.leading_dim);
+      if (m_inputData.sigma != 0) {
+          for (Int c = 0; c < BlockSize; ++c)
+              diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
+      }
+  }
+
+  template<Int BlockSize>
+  void BlockCPlanInitializeFactorColumns(Int supernode_offset, Int jstart, Int jend, BlasMatrixView<Field> &diagonal_block) {
+      FillZerosLowerTriangularMiddleCols(diagonal_block.data, jstart, jend, diagonal_block.leading_dim);
+
+      m_inputData.template injectEntriesBlockCPlan<BlockSize>(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data(), diagonal_block.leading_dim);
+      if (m_inputData.sigma != 0) {
+          for (Int c = jstart; c < jend; ++c)
+              diagonal_block(c, c) += m_inputData.sigma;
+      }
+  }
+
+  template<Int BlockSize>
+  void BlockCPlanInitializeFactorSupernodeColumns(Int supernode_offset, Int supernode_size, BlasMatrixView<Field> &diagonal_block) {
+      FillZerosLowerTriangular(diagonal_block.data, diagonal_block.width, diagonal_block.leading_dim);
+
+      m_inputData.template injectEntriesBlockCPlan<BlockSize>(supernode_offset, supernode_offset + supernode_size, factor_values_.Data(), diagonal_block.leading_dim);
       if (m_inputData.sigma != 0) {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;

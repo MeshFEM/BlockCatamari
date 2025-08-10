@@ -17,7 +17,44 @@
 
 namespace catamari {
 
-// src.block<N, N> += dst.block<N, N>
+// dst.block<N, N> = transpose(src.block<N, N>)
+template<Int N, class Field>
+void copyBlockContiguousSrcTranspose(const Field *__restrict src, Field *__restrict dst, Int dst_leading_dim) {
+#if 0
+    for (Int cj = 0; cj < N; ++cj) {
+        Field *__restrict dst_row = dst + cj;
+        for (Int ci = 0; ci < N; ++ci) {
+            *dst_row = *src++;
+            dst_row += dst_leading_dim;
+        }
+    }
+#else
+    #pragma unroll
+    for (Int cj = 0; cj < N; ++cj) {
+        const Field *__restrict src_row = src + cj;
+        #pragma unroll
+        for (Int ci = 0; ci < N; ++ci) {
+            dst[ci] = *src_row;
+            src_row += N;
+        }
+        dst += dst_leading_dim;
+    }
+#endif
+}
+
+// dst.block<N, N> = src.block<N, N>
+template<Int N, class Field>
+void copyBlockContiguousSrc(const Field *__restrict src, Field *__restrict dst, Int dst_leading_dim) {
+    for (Int cj = 0; cj < N; ++cj) {
+        // for (Int ci = 0; ci < N; ++ci)
+        //     dst[ci] = *src++;
+        std::copy_n(src, N, dst);
+        src += N;
+        dst += dst_leading_dim;
+    }
+}
+
+// dst.block<N, N> += src.block<N, N>
 template<Int N, class Field>
 void accumulateBlock(const Field *__restrict src, const Int src_leading_dim, Field *__restrict dst, Int dst_leading_dim) {
     for (Int cj = 0; cj < N; ++cj) {

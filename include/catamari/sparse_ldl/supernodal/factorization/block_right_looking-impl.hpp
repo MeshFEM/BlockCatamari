@@ -178,7 +178,7 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
             for (Int cj = 0; cj < num_child_diag_indices; cj += BlockSize) {
                 Int dst_j = child_rel_indices[cj]; // Parent block column into which the child block column is merging
                 Int jnext = dst_j + BlockSize;
-                ldl.InitializeFactorColumns(sno, back_j, jnext, diagonal_block); // Initialize up to the right edge of the destination block column
+                ldl.template BlockCPlanInitializeFactorColumns<BlockSize>(sno, back_j, jnext, diagonal_block); // Initialize up to the right edge of the destination block column
 
                 const Field* child_column = child_schur_complement.Pointer(0, cj);
                 Field *     factor_column = diagonal_block.Pointer(0, dst_j);
@@ -188,7 +188,7 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
                 }
                 back_j = jnext; // Advance to the next uninitialized parent column block.
             }
-            if (back_j < supernode_size) ldl.InitializeFactorColumns(sno, back_j, supernode_size, diagonal_block); // Initialize remaining columns not intersected by the child
+            if (back_j < supernode_size) ldl.template BlockCPlanInitializeFactorColumns<BlockSize>(sno, back_j, supernode_size, diagonal_block); // Initialize remaining columns not intersected by the child
         }
         FG_STOP_TIMER(shared_state.finegrained_timers, supernode, InitializeColumns);
 
@@ -252,7 +252,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     const Int factor_height = diagonal_block.Height() + lower_block.Height();
 
     for (Int j = 0; j < supernode_size; j += BlockSize) {
-        ldl.template InitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
+        ldl.template BlockCPlanInitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
 
         Field* factor_column = diagonal_block.Pointer(0, j);
         for (Int ci = 0; ci < num_children; ++ci) {
@@ -368,7 +368,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
 
         if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
         if (num_children == 0)
-            InitializeFactorSupernodeColumns(ordering_.supernode_offsets[supernode], lower_block.width, diagonal_block);
+            BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(ordering_.supernode_offsets[supernode], lower_block.width, diagonal_block);
 
         allocate_schur_complement(); // TODO: move this after `process_child` if/when we implement an expand-in-place strategy
         for (Int child_index = 0; child_index < num_children; ++child_index) {

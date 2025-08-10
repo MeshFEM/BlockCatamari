@@ -230,7 +230,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockLeftLooking() { // matrix data
         const Int supernode_size = ordering_.supernode_sizes[supernode];
         BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
 
-        InitializeFactorSupernodeColumns(sno, supernode_size, diagonal_block);
+        BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block);
 
         CATAMARI_STOP_TIMER(profile.initialize_columns);
 
