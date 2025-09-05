@@ -1451,7 +1451,7 @@ void LowerNormalHermitianOuterProductDynamicBLASDispatch(
   return;
 #else
   // using EVec = Eigen::Matrix<Field, Eigen::Dynamic, 1>;
-  int k_start = 0;
+  Int k_start = 0;
   if (beta == Field(0)) {
       const Field *col_k = left_matrix.Pointer(0, 0);
       for (Int j = 0; j < output_height; ++j) {
@@ -1494,7 +1494,7 @@ void LowerNormalHermitianOuterProduct(
   const Int output_height = output_matrix->height;
   const Int contraction_size = left_matrix.width;
 
-  int k_start = 0;
+  Int k_start = 0;
   if (beta != Field(1)) {
       for (Int j = 0; j < output_height; ++j)
         for (Int i = j; i < output_height; ++i)
@@ -3388,7 +3388,7 @@ void Permute(const Perm &permutation, const BlasMatrixView<Field> &in, BlasMatri
 
 // Out-of-place inverse permutation
 // Perm can be, e.g., Buffer<Int>, ConstBlasMatrixView<Int>
-template <size_t BLOCK_SIZE = 1, class Perm, class Field>
+template <Int BLOCK_SIZE = 1, class Perm, class Field>
 void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatrixView<Field> *out) {
     BENCHMARK_SCOPED_TIMER_SECTION timer("InversePermute");
     if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
@@ -3398,21 +3398,21 @@ void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatr
         Field *out_ptr = out->Pointer(0, j);
         if (out->height % BLOCK_SIZE != 0) { throw std::runtime_error("InversePermute: height must be a multiple of BLOCK_SIZE"); }
 
-        size_t blockHeight = out->height / BLOCK_SIZE;
+        Int blockHeight = out->height / BLOCK_SIZE;
 
-        auto permute_range = [out_ptr, in_ptr, &iperm](const tbb::blocked_range<size_t> &r) {
-            const size_t end = r.end() * BLOCK_SIZE;
+        auto permute_range = [out_ptr, in_ptr, &iperm](const tbb::blocked_range<Int> &r) {
+            const Int end = r.end() * BLOCK_SIZE;
             Field *dst = out_ptr + r.begin() * BLOCK_SIZE;
-            for (size_t i = BLOCK_SIZE * r.begin(); i < end; i += BLOCK_SIZE) {
+            for (Int i = BLOCK_SIZE * r.begin(); i < end; i += BLOCK_SIZE) {
                 const Field *src = in_ptr + iperm[i];
-                for (size_t c = 0; c < BLOCK_SIZE; ++c)
+                for (Int c = 0; c < BLOCK_SIZE; ++c)
                     *(dst++) = *(src++);
            }
         };
 
         if (blockHeight > 4096) {
-            tbb::parallel_for(tbb::blocked_range<size_t>(0, blockHeight, 2048), permute_range);
-        } else permute_range(tbb::blocked_range<size_t>(0, blockHeight));
+            tbb::parallel_for(tbb::blocked_range<Int>(0, blockHeight, 2048), permute_range);
+        } else permute_range(tbb::blocked_range<Int>(0, blockHeight));
     }
 }
 

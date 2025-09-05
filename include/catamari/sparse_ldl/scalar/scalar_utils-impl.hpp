@@ -214,7 +214,7 @@ void ParallelEliminationForestAndDegreesRecursion(
     // we record the original *unpermuted* row indices (which are sorted in `matrix`).
     Int *child_heads = pattern_flags.Data();
     Int col_head = column_beg;
-    for (size_t ci = 0; ci < num_children; ++ci) child_heads[ci] = 0;
+    for (Int ci = 0; ci < num_children; ++ci) child_heads[ci] = 0;
     constexpr Int NONE = std::numeric_limits<Int>::max();
     Int prev = NONE;
     auto perm = [have_permutation, &ordering](Int row) { return have_permutation ? ordering.permutation[row] : row; };
@@ -227,7 +227,7 @@ void ParallelEliminationForestAndDegreesRecursion(
             else { next = row; break; }
         }
         // Consider each child as a source as well
-        for (size_t ci = 0; ci < num_children; ++ci) {
+        for (Int ci = 0; ci < num_children; ++ci) {
             const auto &child_structure = (*structures)[children[ci]];
             // Advance to next admissible entry from this child structure
             Int &h = child_heads[ci];
@@ -293,7 +293,7 @@ void ParallelEliminationForestAndDegrees(
   // spin lock (we don't expect much contension here).
   std::unique_ptr<std::vector<std::atomic<bool>>> children_list_locks = std::make_unique<std::vector<std::atomic<bool>>>(num_rows);
   BENCHMARK_START_TIMER_SECTION("Initialize locks");
-  parallel_for_range(num_rows, [&](size_t i) { atomic_init(&(*children_list_locks)[i], false); });
+  parallel_for_range(num_rows, [&](Int i) { atomic_init(&(*children_list_locks)[i], false); });
   BENCHMARK_STOP_TIMER_SECTION("Initialize locks");
   Buffer_mimalloc<std::vector<Int, mi_stl_allocator<Int>>> children_lists(num_rows);
 

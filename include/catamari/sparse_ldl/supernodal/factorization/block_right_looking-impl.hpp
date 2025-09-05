@@ -248,7 +248,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     BlasMatrixView<Field> schur_complement = schur_complements[supernode];
 
     const Int supernode_size = o.supernode_sizes[supernode];
-    std::vector<size_t> child_j(num_children); // pointer into the child columns
+    std::vector<Int> child_j(num_children); // pointer into the child columns
     const Int factor_height = diagonal_block.Height() + lower_block.Height();
 
     for (Int j = 0; j < supernode_size; j += BlockSize) {
@@ -519,7 +519,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
               << ", max_threads: " << max_threads << std::endl;
 
     {
-        size_t parallel_supernode_count = 0;
+        Int parallel_supernode_count = 0;
         for (Int i = 0; i < num_supernodes; ++i) {
             if (work_estimates[i] >= min_parallel_work)
                 ++parallel_supernode_count;

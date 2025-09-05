@@ -283,7 +283,7 @@ void MergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     BlasMatrixView<Field> schur_complement = schur_complements[supernode];
 
     const Int supernode_size = o.supernode_sizes[supernode];
-    std::vector<size_t> child_j(num_children); // pointer into the child columns
+    std::vector<Int> child_j(num_children); // pointer into the child columns
     const Int factor_height = diagonal_block.Height() + lower_block.Height();
 
     // tbb::parallel_for(tbb::blocked_range<catamari::Int>(0, supernode_size), [&](const tbb::blocked_range<catamari::Int> &r) {
@@ -527,43 +527,43 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
 
   // {
   //   // Histogram of child count.
-  //   std::vector<size_t> child_count_statistics;
-  //   auto record = [&](size_t count) {
+  //   std::vector<Int> child_count_statistics;
+  //   auto record = [&](Int count) {
   //       if (count >= child_count_statistics.size()) child_count_statistics.resize(count + 1);
   //       ++child_count_statistics[count];
   //   };
   //   const auto &af = ordering_.assembly_forest;
-  //   for (size_t supernode = 0; supernode < num_supernodes; ++supernode) {
+  //   for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
   //       const Int num_children = af.child_offsets[supernode + 1] - af.child_offsets[supernode];
   //       record(num_children);
 
   //   }
-  //   for (size_t i = 0; i < child_count_statistics.size(); ++i) {
+  //   for (Int i = 0; i < child_count_statistics.size(); ++i) {
   //       std::cout << "child count " << i << ": " << child_count_statistics[i] << std::endl;
   //   }
   // }
 
   // {
   //     // Histogram of the "run lengths" of contiguous indices.
-  //     std::vector<size_t> supernode_run_length_statistics;
-  //     auto record = [&](size_t run_len) {
+  //     std::vector<Int> supernode_run_length_statistics;
+  //     auto record = [&](Int run_len) {
   //         if (run_len >= supernode_run_length_statistics.size()) supernode_run_length_statistics.resize(run_len + 1);
   //         supernode_run_length_statistics[run_len]++;
   //     };
 
-  //     for (size_t supernode = 0; supernode < num_supernodes; ++supernode) {
+  //     for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
   //         const Int *indices = lower_factor_->StructureBeg(supernode);
-  //         const size_t num_indices = lower_factor_->StructureEnd(supernode) - indices;
+  //         const Int num_indices = lower_factor_->StructureEnd(supernode) - indices;
   //         if (num_indices == 0) continue;
-  //         size_t run_len = 1;
-  //         for (size_t i = 1; i < num_indices; ++i) {
+  //         Int run_len = 1;
+  //         for (Int i = 1; i < num_indices; ++i) {
   //             if (indices[i] == indices[i - 1] + 1) ++run_len;
   //             else { record(run_len); run_len = 1; }
   //         }
   //         record(run_len);
   //     }
 
-  //     for (size_t i = 0; i < supernode_run_length_statistics.size(); ++i) {
+  //     for (Int i = 0; i < supernode_run_length_statistics.size(); ++i) {
   //         std::cout << "run_len " << i << ": " << supernode_run_length_statistics[i] << std::endl;
   //     }
   // }

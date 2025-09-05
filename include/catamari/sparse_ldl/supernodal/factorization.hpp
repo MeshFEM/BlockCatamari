@@ -47,7 +47,7 @@ struct ConversionPlan {
     // Crucially does no value initialization, unlike std::pair!
     struct Entry { Int dst, src; };
 
-    void resize(size_t size) { m_entries.Resize(size); }
+    void resize(UInt size) { m_entries.Resize(size); }
     bool empty() const { return m_entries.Size() == 0; }
     Int size() const { return m_entries.Size(); }
 
@@ -643,10 +643,10 @@ class Factorization {
       {
           // BENCHMARK_SCOPED_TIMER_SECTION timer2("UpgradePermutation");
           auto upgrade_permutation = [block_size](Buffer<Int> &perm) {
-              size_t m = perm.Size();
+              Int m = perm.Size();
               std::decay_t<decltype(perm)> scalarPermutation(block_size * m);
-              for (size_t i = 0; i < m; ++i) {
-                  for (size_t j = 0; j < block_size; ++j)
+              for (Int i = 0; i < m; ++i) {
+                  for (Int j = 0; j < block_size; ++j)
                       scalarPermutation[block_size * i + j] = perm[i] * block_size + j;
               }
               perm = std::move(scalarPermutation);
@@ -691,9 +691,9 @@ class Factorization {
               throw std::runtime_error("Legacy mode does not support block factorization!");
 
           // Expand the structure indices.
-          parallel_for_range(num_supernodes, [&](size_t s) {
-              size_t num_block_structure_indices = std::distance( block_lf.StructureBeg(s),  block_lf.StructureEnd(s));
-              size_t num_structure_indices       = std::distance(scalar_lf.StructureBeg(s), scalar_lf.StructureEnd(s));
+          parallel_for_range(num_supernodes, [&](Int s) {
+              Int num_block_structure_indices = std::distance( block_lf.StructureBeg(s),  block_lf.StructureEnd(s));
+              Int num_structure_indices       = std::distance(scalar_lf.StructureBeg(s), scalar_lf.StructureEnd(s));
               if (block_size * num_block_structure_indices != num_structure_indices) { throw std::logic_error("Structure size mismatch"); }
 
               Int *dst = scalar_lf.StructureBeg(s);
@@ -765,7 +765,7 @@ class Factorization {
       WriteTruncatedForestToDot(directory + "/supernodes.dot", nodeSizeLabel, ordering_.assembly_forest, max_levels, /* avoid_isolated_roots = */ false);
 
       // Also visualize the parallel flag
-      for (size_t nt = 2; nt < 32; nt *= 2) {
+      for (Int nt = 2; nt < 32; nt *= 2) {
           double min_parallel_ratio_work = (total_work_ * control_.parallel_ratio_threshold) / nt;
           double min_parallel_work = std::max(control_.min_parallel_threshold, min_parallel_ratio_work);
 
@@ -787,7 +787,7 @@ class Factorization {
                   if (has_work_estimates) {
                     ss << ", \"work\": " << work_estimates_[supernode];
                     ss << ", \"parallel_mask\": [";
-                    for (size_t nt = 2; nt < 32; nt *= 2) {
+                    for (Int nt = 2; nt < 32; nt *= 2) {
                         double min_parallel_ratio_work = (total_work_ * control_.parallel_ratio_threshold) / nt;
                         double min_parallel_work = std::max(control_.min_parallel_threshold, min_parallel_ratio_work);
                         if (nt > 2) ss << ", ";
@@ -978,7 +978,7 @@ private:
   void LowerTriangularSolveRecursion(Int supernode,
                                      BlasMatrixView<Field>* right_hand_sides,
                                      Buffer<Field>* workspace) const;
-  template<size_t BLOCK_SIZE = 1>
+  template<Int BLOCK_SIZE = 1>
   void OpenMPLowerTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state, int level) const;
@@ -1005,7 +1005,7 @@ private:
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       Buffer<Field>* workspace) const;
 
-  template<size_t BLOCK_SIZE = 1>
+  template<Int BLOCK_SIZE = 1>
   void LowerTransposeSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       BlasMatrixView<Field> &work_right_hand_sides) const;

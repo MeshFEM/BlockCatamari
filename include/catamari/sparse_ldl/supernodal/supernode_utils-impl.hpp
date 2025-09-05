@@ -11,8 +11,6 @@
 #include "catamari/dense_factorizations/cholesky-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/supernode_utils.hpp"
 
-#include "quotient/index_utils.hpp"
-
 namespace catamari {
 namespace supernodal_ldl {
 
@@ -65,6 +63,7 @@ bool ValidFundamentalSupernodes(const CoordinateMatrix<Field>& matrix,
                     "Supernode " + std::to_string(index) + " had length " +
                         std::to_string(supernode_sizes[index]));
   }
+#if CATAMARI_DEBUG
   {
     Int size_sum = 0;
     for (const Int& supernode_size : supernode_sizes) {
@@ -74,6 +73,7 @@ bool ValidFundamentalSupernodes(const CoordinateMatrix<Field>& matrix,
                     "Supernode sizes summed to " + std::to_string(size_sum) +
                         " instead of " + std::to_string(num_rows));
   }
+#endif
 
   Buffer<Int> parents, degrees;
   scalar_ldl::EliminationForestAndDegrees(matrix, ordering, &parents, &degrees);
@@ -730,7 +730,7 @@ void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
 
   // Sort the structures.
   const Int num_supernodes = ordering.supernode_sizes.Size();
-  parallel_for_range(num_supernodes, [&](size_t s) {
+  parallel_for_range(num_supernodes, [&](Int s) {
     std::sort(lower_factor->StructureBeg(s),
               lower_factor->StructureEnd(s));
   }, sort_grain_size, 2 * sort_grain_size);

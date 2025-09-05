@@ -372,7 +372,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
 }
 
 template <class Field>
-template <size_t BLOCK_SIZE>
+template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     BlasMatrixView<Field> &work_right_hand_sides) const {

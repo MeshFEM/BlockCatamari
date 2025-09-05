@@ -77,7 +77,7 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
 }
 
 template <class Field>
-template<size_t BLOCK_SIZE>
+template<Int BLOCK_SIZE>
 void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     SolveSharedState* shared_state, int level) const {
