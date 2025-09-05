@@ -543,6 +543,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     }
 #endif
 
+#if 0
     {
         // Determine the amount of memory needed to store the Schur
         // complements in one contiguous buffer (without freeing).
@@ -555,10 +556,9 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
             else {
                 // Subtree storage stacks are allocated only for the roots of
                 // serial trees.
-                const bool parallel_parent = (work_estimates[ordering_.assembly_forest.parents[s]] >= min_parallel_work) && (max_threads > 1);
-                SchurComplementStorage<Field> *subtreeStorage = &(shared_state_.schur_complement_storage[s]);
-                if (parallel_parent)
-                    storage_size += subtreeStorage->getStoragedNeeded(s, ordering_.assembly_forest, *lower_factor_);
+                const bool serial_subtree_root = (ordering_.assembly_forest.parents[s] < 0) || (work_estimates[ordering_.assembly_forest.parents[s]] >= min_parallel_work) && (max_threads > 1);
+                if (serial_subtree_root)
+                    storage_size += shared_state_.schur_complement_storage[s].getStoragedNeeded(s, ordering_.assembly_forest, *lower_factor_);
             }
         }
 
@@ -566,6 +566,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         // std::cout << "    As fraction of factor size: "
         //           << (double(storage_size) / factor_values_.data.Size()) << std::endl;
     }
+#endif
 
 #if CATAMARI_FINEGRAINED_TIMERS
     shared_state.finegrained_timers.allocate(num_supernodes);
