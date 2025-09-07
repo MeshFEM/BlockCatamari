@@ -235,9 +235,10 @@ void BlockMergeChildSchurComplement(Int supernode, Int child,
 
 template <Int BlockSize, class Field>
 void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
-                                const Buffer<BlasMatrixView<Field>> &schur_complements) {
+                                RightLookingSharedState<Field> *shared_state) {
     const auto &o = ldl.ordering_;
     const auto &af = o.assembly_forest;
+    const Buffer<BlasMatrixView<Field>> &schur_complements = shared_state->schur_complements;
     const Int child_beg = af.child_offsets[supernode];
     const Int num_children = af.child_offsets[supernode + 1] - child_beg;
     const Int sno = o.supernode_offsets[supernode];
@@ -248,60 +249,111 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     BlasMatrixView<Field> schur_complement = schur_complements[supernode];
 
     const Int supernode_size = o.supernode_sizes[supernode];
-    std::vector<Int> child_j(num_children); // pointer into the child columns
     const Int factor_height = diagonal_block.Height() + lower_block.Height();
 
-    for (Int j = 0; j < supernode_size; j += BlockSize) {
-        ldl.template BlockCPlanInitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
+    auto merge_into_diagonal_block = [&]() {
+        // Parallelize for very large supernodes (especially roots with no/limited parallelism)
+#if PARALLELIZE_MERGE_INTO_SUPERNODE
+        if (supernode_size > 512) {
+            tbb::parallel_for(tbb::blocked_range<Int>(0, supernode_size / BlockSize), [&](const tbb::blocked_range<Int> &r) {
+                ldl.template BlockCPlanInitializeFactorColumns<BlockSize>(sno, BlockSize * r.begin(), BlockSize * r.end(), diagonal_block);
+            }, *(shared_state->tbb_ctx));
 
-        Field* factor_column = diagonal_block.Pointer(0, j);
-        for (Int ci = 0; ci < num_children; ++ci) {
-            Int cj = child_j[ci];
+            for (Int ci = 0; ci < num_children; ++ci) {
+                const Int child = af.children[child_beg + ci];
+                const Int num_child_diag_indices = af.num_child_diag_indices[child];
+                const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+                const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
 
-            const Int child = af.children[child_beg + ci];
-            const Int num_child_diag_indices = af.num_child_diag_indices[child];
-            const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
-            const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
+                const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
 
-            if (cj >= child_degree || child_rel_indices[cj] != j) continue;
-
-            const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
-            const Field* child_column = child_schur_complement.Pointer(0, cj);
-
-            for (Int i = cj; i < child_degree; i += BlockSize) {
-                accumulateBlock<BlockSize>(child_column + i, child_schur_complement.LeadingDimension(), // src
-                                           factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
+                tbb::parallel_for(tbb::blocked_range<Int>(0, num_child_diag_indices / BlockSize), [&](const tbb::blocked_range<Int> &r) {
+                    const Int jend = BlockSize * r.end();
+                    for (Int j = BlockSize * r.begin(); j < jend; j += BlockSize) {
+                        const Field* child_column = child_schur_complement.Pointer(0, j);
+                        Field* factor_column = diagonal_block.Pointer(0, child_rel_indices[j]);
+                        for (Int i = j; i < child_degree; i += BlockSize) {
+                            accumulateBlock<BlockSize>(child_column + i, child_schur_complement.LeadingDimension(), // src
+                                                       factor_column + child_rel_indices[i], diagonal_block.LeadingDimension()); // dst
+                        }
+                    }
+                }, *(shared_state->tbb_ctx));
             }
 
-            child_j[ci] = cj + BlockSize;
+            return;
         }
+#endif
+        std::vector<Int> child_j(num_children); // pointer into the child columns
+        for (Int j = 0; j < supernode_size; j += BlockSize) {
+            ldl.template BlockCPlanInitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
+
+            Field* factor_column = diagonal_block.Pointer(0, j);
+            for (Int ci = 0; ci < num_children; ++ci) {
+                Int cj = child_j[ci];
+
+                const Int child = af.children[child_beg + ci];
+                const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+                const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
+
+                if (cj >= child_degree || child_rel_indices[cj] != j) continue;
+
+                const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
+                const Field* child_column = child_schur_complement.Pointer(0, cj);
+
+                for (Int i = cj; i < child_degree; i += BlockSize) {
+                    accumulateBlock<BlockSize>(child_column + i, child_schur_complement.LeadingDimension(), // src
+                                               factor_column + child_rel_indices[i], lower_block.LeadingDimension()); // dst
+                }
+
+                child_j[ci] = cj + BlockSize;
+            }
+        }
+    };
+
+    auto merge_into_schur_complement = [&]() {
+        std::vector<Int> child_j(num_children); // pointer into the child columns
+        for (Int ci = 0; ci < num_children; ++ci) {
+            const Int child = af.children[child_beg + ci];
+            child_j[ci] = af.num_child_diag_indices[child];
+        }
+        const Int sc_size = schur_complement.width;
+        for (Int j = 0; j < sc_size; j += BlockSize) {
+            FillZerosLowerTriangularMiddleCols(schur_complement.data, j, j + BlockSize, schur_complement.height);
+            Int front_j = j + supernode_size;
+            Field *schur_column = schur_complement.Pointer(-supernode_size, j);
+
+            for (Int ci = 0; ci < num_children; ++ci) {
+                Int cj = child_j[ci];
+
+                const Int child = af.children[child_beg + ci];
+                const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
+                const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
+
+                if (cj >= child_degree || child_rel_indices[cj] != front_j) continue;
+
+                const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
+
+                const Field* child_column = child_schur_complement.Pointer(0, cj);
+                for (Int i = cj; i < child_degree; i += BlockSize) {
+                    accumulateBlock<BlockSize>(child_column + i,              child_schur_complement.LeadingDimension(), // src
+                                               schur_column + child_rel_indices[i], schur_complement.LeadingDimension()); // dst
+                }
+
+                child_j[ci] = cj + BlockSize;
+            }
+        }
+    };
+
+    if (supernode_size > 128 && schur_complement.width > 128) {
+        tbb::task_group tg(*(shared_state->tbb_ctx));
+        tg.run(merge_into_diagonal_block);
+        tg.run(merge_into_schur_complement);
+        tg.wait();
     }
-
-    const Int sc_size = schur_complement.width;
-    for (Int j = 0; j < sc_size; j += BlockSize) {
-        FillZerosLowerTriangularMiddleCols(schur_complement.data, j, j + BlockSize, schur_complement.height);
-        Int front_j = j + supernode_size;
-        Field *schur_column = schur_complement.Pointer(-supernode_size, j);
-
-        for (Int ci = 0; ci < num_children; ++ci) {
-            Int cj = child_j[ci];
-
-            const Int child = af.children[child_beg + ci];
-            const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
-            const Int *child_rel_indices = af.child_rel_indices.Data() + af.child_rel_indices_offsets[child];
-
-            if (cj >= child_degree || child_rel_indices[cj] != front_j) continue;
-
-            const BlasMatrixView<Field> &child_schur_complement = schur_complements[child];
-
-            const Field* child_column = child_schur_complement.Pointer(0, cj);
-            for (Int i = cj; i < child_degree; i += BlockSize) {
-                accumulateBlock<BlockSize>(child_column + i,              child_schur_complement.LeadingDimension(), // src
-                                           schur_column + child_rel_indices[i], schur_complement.LeadingDimension()); // dst
-            }
-
-            child_j[ci] = cj + BlockSize;
-        }
+    else {
+        // Serial merge
+        merge_into_diagonal_block();
+        merge_into_schur_complement();
     }
 }
 
@@ -434,7 +486,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             }
 #else
             FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
-            BlockMergeChildSchurComplements<BlockSize>(supernode, *this, shared_state->schur_complements);
+            BlockMergeChildSchurComplements<BlockSize>(supernode, *this, shared_state);
             FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
 #endif
         }
