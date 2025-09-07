@@ -376,7 +376,36 @@ bool Factorization<Field>::BlockRightLookingSubtree(
     const Int num_children = child_end - child_beg;
 
     const double work_estimate = work_estimates[supernode];
-    const bool parallel = (work_estimate >= min_parallel_work) && (num_children > 1);
+    bool parallel = (work_estimate >= min_parallel_work) && (num_children > 1);
+
+    std::vector<Int> child_chunks;
+    Buffer<Int> sorted_children;
+    if (parallel) {
+        // Merge small children into "chunks"
+        sorted_children.Resize(num_children);
+        for (Int child_index = 0; child_index < num_children; ++child_index)
+            sorted_children[child_index] = ordering_.assembly_forest.children[child_beg + child_index];
+        std::sort(sorted_children.Data(), sorted_children.Data() + num_children,
+                  [&work_estimates](Int a, Int b) { return work_estimates[a] < work_estimates[b]; });
+        // group children into chunks of size at least `min_parallel_work`,
+        // avoiding the creation of many small tasks.
+        child_chunks.reserve(num_children + 1);
+        child_chunks.push_back(0);
+
+        double chunk_work = 0;
+        for (Int child_index = 0; child_index < num_children; ++child_index) {
+            const Int child = sorted_children[child_index];
+            chunk_work += work_estimates[child];
+            if (chunk_work >= min_parallel_work) {
+                child_chunks.push_back(child_index + 1);
+                chunk_work = 0;
+            }
+        }
+        if (chunk_work < min_parallel_work && child_chunks.size() > 1) { child_chunks.pop_back(); }
+        if (child_chunks.back() != num_children)
+            child_chunks.push_back(num_children);
+        if (child_chunks.size() <= 2) parallel = false; // only one chunk; not actually parallel...
+    }
 
     auto process_child = [&, supernode, min_parallel_work, shared_state](Int child, SparseLDLResult<Field> *resultContrib, SchurComplementStorage<Field> *stack) {
         const Int child_offset = ordering_.supernode_offsets[child];
@@ -456,12 +485,24 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);
 
         tbb::task_group tg(*(shared_state->tbb_ctx));
-        for (Int child_index = 0; child_index < num_children; ++child_index) {
-            const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
-            tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
+        for (size_t chunk = 0; chunk < child_chunks.size() - 1; ++chunk) {
+            const Int chunk_start = child_chunks[chunk];
+            const Int chunk_end = child_chunks[chunk + 1];
+            tg.run([&, chunk_start, chunk_end]() {
+                for (Int child_index = chunk_start; child_index < chunk_end; ++child_index) {
+                    const Int child = sorted_children[child_index];
                     process_child(child, &result_contributions[child_index], nullptr);
+                }
             });
         }
+
+        // tbb::task_group tg(*(shared_state->tbb_ctx));
+        // for (Int child_index = 0; child_index < num_children; ++child_index) {
+        //     const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
+        //     tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
+        //             process_child(child, &result_contributions[child_index], nullptr);
+        //     });
+        // }
         // process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
         auto status = tg.wait();
 
@@ -565,18 +606,148 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
     const double min_parallel_work = std::max(std::max(control_.min_parallel_threshold, min_parallel_ratio_work),
             max_threads < 2 ? std::numeric_limits<double>::infinity() : 0); // Forbid parallel execution
 #if 0
-    std::cout << "parallel_ratio_threshold: " << control_.parallel_ratio_threshold
-              << ", min_parallel_threshold: " << control_.min_parallel_threshold << std::endl;
-    std::cout << "Total work: " << total_work << ", min_parallel_work: " << min_parallel_work
-              << ", max_threads: " << max_threads << std::endl;
+    const bool first_num_fact = shared_state_.schur_complements.Size() != num_supernodes;
+    if (first_num_fact) {
+        std::cout << "parallel_ratio_threshold: " << control_.parallel_ratio_threshold
+                  << ", min_parallel_threshold: " << control_.min_parallel_threshold << std::endl;
+        std::cout << "Total work: " << total_work << ", min_parallel_work: " << min_parallel_work
+                  << ", min_parallel_ratio_work: " << min_parallel_ratio_work
+                  << ", max_threads: " << max_threads << std::endl;
 
-    {
-        Int parallel_supernode_count = 0;
-        for (Int i = 0; i < num_supernodes; ++i) {
-            if (work_estimates[i] >= min_parallel_work)
-                ++parallel_supernode_count;
+        std::cout << "Serial subtree work estimates:";
+        {
+            Int parallel_supernode_count = 0;
+            Int serial_subtrees = 0;
+            for (Int i = 0; i < num_supernodes; ++i) {
+                if (work_estimates[i] >= min_parallel_work)
+                    ++parallel_supernode_count;
+                else {
+                    const bool is_serial_subtree = ((ordering_.assembly_forest.parents[i] < 0)
+                                    || (work_estimates[ordering_.assembly_forest.parents[i]] >= min_parallel_work));
+                    serial_subtrees += is_serial_subtree;
+                    if (is_serial_subtree)
+                        std::cout << '\t' << work_estimates[i];
+                }
+            }
+            std::cout << std::endl;
+            std::cout << "Parallel supernodes: " << parallel_supernode_count << ", serial subtrees: " << serial_subtrees << std::endl;
+
+            Buffer<bool> is_serial_subtree_node(num_supernodes);
+            for (Int i = 0; i < num_supernodes; ++i) {
+                if (work_estimates[i] < min_parallel_work) {
+                    is_serial_subtree_node[i] = true;
+                    continue;
+                }
+
+                // For potentially parallel nodes, we determine how many child
+                // chunks they have.
+
+                // Group children into chunks of size at least `min_parallel_work`,
+                // avoiding the creation of many small tasks.
+                std::vector<Int> child_chunks;
+                Buffer<Int> sorted_children;
+                const Int child_beg = ordering_.assembly_forest.child_offsets[i];
+                const Int child_end = ordering_.assembly_forest.child_offsets[i + 1];
+                const Int num_children = child_end - child_beg;
+
+                sorted_children.Resize(num_children);
+                bool has_parallel_descendants = false;
+                for (Int child_index = 0; child_index < num_children; ++child_index) {
+                    Int child = ordering_.assembly_forest.children[child_beg + child_index];
+                    sorted_children[child_index] = child;
+                    if (!is_serial_subtree_node[child])
+                        has_parallel_descendants = true;
+                }
+                if (has_parallel_descendants) {
+                    is_serial_subtree_node[i] = false;
+                    continue;
+                }
+
+                std::sort(sorted_children.Data(), sorted_children.Data() + num_children,
+                          [&work_estimates](Int a, Int b) { return work_estimates[a] < work_estimates[b]; });
+                child_chunks.reserve(num_children + 1);
+                child_chunks.push_back(0);
+
+                double chunk_work = 0;
+                for (Int child_index = 0; child_index < num_children; ++child_index) {
+                    const Int child = sorted_children[child_index];
+                    chunk_work += work_estimates[child];
+                    if (chunk_work >= min_parallel_work) {
+                        child_chunks.push_back(child_index + 1);
+                        chunk_work = 0;
+                    }
+                }
+                if (chunk_work < min_parallel_work && child_chunks.size() > 1) { child_chunks.pop_back(); }
+                if (child_chunks.back() != num_children)
+                    child_chunks.push_back(num_children);
+                Int num_chunks = child_chunks.size() - 1;
+                is_serial_subtree_node[i] = num_chunks <= 1;
+            }
+
+            // Report statistics about the serial subtrees.
+            std::cout << "Serial subtree chunk work estimates:";
+            for (Int i = 0; i < num_supernodes; ++i) {
+                if (is_serial_subtree_node[i]) continue;
+
+                // Group children into chunks of size at least `min_parallel_work`,
+                // avoiding the creation of many small tasks.
+                std::vector<Int> child_chunks;
+                Buffer<Int> sorted_children;
+                const Int child_beg = ordering_.assembly_forest.child_offsets[i];
+                const Int child_end = ordering_.assembly_forest.child_offsets[i + 1];
+                const Int num_children = child_end - child_beg;
+
+                sorted_children.Resize(num_children);
+                bool has_parallel_descendants = false;
+                for (Int child_index = 0; child_index < num_children; ++child_index) {
+                    Int child = ordering_.assembly_forest.children[child_beg + child_index];
+                    sorted_children[child_index] = child;
+                    if (!is_serial_subtree_node[child])
+                        has_parallel_descendants = true;
+                }
+                if (has_parallel_descendants) {
+                    is_serial_subtree_node[i] = false;
+                    continue;
+                }
+
+                std::sort(sorted_children.Data(), sorted_children.Data() + num_children,
+                          [&work_estimates](Int a, Int b) { return work_estimates[a] < work_estimates[b]; });
+                child_chunks.reserve(num_children + 1);
+                child_chunks.push_back(0);
+
+                {
+                    double chunk_work = 0;
+                    for (Int child_index = 0; child_index < num_children; ++child_index) {
+                        const Int child = sorted_children[child_index];
+                        chunk_work += work_estimates[child];
+                        if (chunk_work >= min_parallel_work) {
+                            child_chunks.push_back(child_index + 1);
+                            chunk_work = 0;
+                        }
+                    }
+                    if (chunk_work < min_parallel_work && child_chunks.size() > 1) { child_chunks.pop_back(); }
+                }
+                if (child_chunks.back() != num_children)
+                    child_chunks.push_back(num_children);
+
+                // For each serial chunk, report its total work.
+                Int num_chunks = child_chunks.size() - 1;
+                for (Int chunk = 0; chunk < num_chunks; ++chunk) {
+                    const Int chunk_start = child_chunks[chunk];
+                    const Int chunk_end = child_chunks[chunk + 1];
+                    double chunk_work = 0;
+                    bool serial_chunk = true;
+                    for (Int child_index = chunk_start; child_index < chunk_end; ++child_index) {
+                        const Int child = sorted_children[child_index];
+                        chunk_work += work_estimates[child];
+                        if (!is_serial_subtree_node[child]) serial_chunk = false;
+                    }
+                    if (serial_chunk)
+                        std::cout << '\t' << chunk_work;
+                }
+            }
+            std::cout << std::endl;
         }
-        std::cout << "Parallel supernodes: " << parallel_supernode_count << std::endl;
     }
 #endif
 
