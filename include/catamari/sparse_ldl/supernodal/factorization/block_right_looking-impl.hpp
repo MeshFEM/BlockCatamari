@@ -378,6 +378,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
     const double work_estimate = work_estimates[supernode];
     bool parallel = (work_estimate >= min_parallel_work) && (num_children > 1);
 
+#if CHUNK_SERIAL_SUBTREES
     std::vector<Int> child_chunks;
     Buffer<Int> sorted_children;
     if (parallel) {
@@ -406,6 +407,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             child_chunks.push_back(num_children);
         if (child_chunks.size() <= 2) parallel = false; // only one chunk; not actually parallel...
     }
+#endif
 
     auto process_child = [&, supernode, min_parallel_work, shared_state](Int child, SparseLDLResult<Field> *resultContrib, SchurComplementStorage<Field> *stack) {
         const Int child_offset = ordering_.supernode_offsets[child];
@@ -485,6 +487,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);
 
         tbb::task_group tg(*(shared_state->tbb_ctx));
+#if CHUNK_SERIAL_SUBTREES
         for (size_t chunk = 0; chunk < child_chunks.size() - 1; ++chunk) {
             const Int chunk_start = child_chunks[chunk];
             const Int chunk_end = child_chunks[chunk + 1];
@@ -495,15 +498,15 @@ bool Factorization<Field>::BlockRightLookingSubtree(
                 }
             });
         }
-
-        // tbb::task_group tg(*(shared_state->tbb_ctx));
-        // for (Int child_index = 0; child_index < num_children; ++child_index) {
-        //     const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
-        //     tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
-        //             process_child(child, &result_contributions[child_index], nullptr);
-        //     });
-        // }
-        // process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
+#else
+        for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
+            const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
+            tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
+                    process_child(child, &result_contributions[child_index], nullptr);
+            });
+        }
+        process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
+#endif
         auto status = tg.wait();
 
         // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
