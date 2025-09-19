@@ -21,9 +21,11 @@ namespace catamari {
 
 template <class Field>
 SparseLDL<Field>::SparseLDL() {
-  // Avoid the potential for order-of-magnitude performance degradation from
-  // slow subnormal processing.
-  EnableFlushToZero();
+  // Julian Panetta: we now apply the floating point settings only to the
+  // methods that we call (prevent Catmari from changing the behavior of user's code).
+  // // Avoid the potential for order-of-magnitude performance degradation from
+  // // slow subnormal processing.
+  // EnableFlushToZero();
 }
 
 template <class Field>
@@ -32,6 +34,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
     const SparseLDLControl<Field>& control) {
   scalar_factorization.reset();
   supernodal_factorization.reset();
+
+  ScopedEnableFlushToZero scope_guard;
 
 #ifdef CATAMARI_ENABLE_TIMERS
   quotient::Timer timer;
@@ -132,6 +136,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
   scalar_factorization.reset();
   supernodal_factorization.reset();
 
+  ScopedEnableFlushToZero scope_guard;
+
   if (control.supernodal_strategy == kScalarFactorization) {
     is_supernodal = false;
   } else if (control.supernodal_strategy == kSupernodalFactorization) {
@@ -221,6 +227,7 @@ template <class Field>
 SparseLDLResult<Field> SparseLDL<Field>::RefactorWithFixedSparsityPattern(
     const CoordinateMatrix<Field>& matrix) {
   typedef ComplexBase<Field> Real;
+  ScopedEnableFlushToZero scope_guard;
 
   // Optionally equilibrate the matrix.
   const CoordinateMatrix<Field>* matrix_to_factor;
@@ -258,6 +265,7 @@ SparseLDLResult<Field> SparseLDL<Field>::RefactorWithFixedSparsityPattern(
     const CoordinateMatrix<Field>& matrix,
     const SparseLDLControl<Field>& control) {
   typedef ComplexBase<Field> Real;
+  ScopedEnableFlushToZero scope_guard;
 
   // TODO(Jack Poulson): Add sanity checks here that, for example, the algorithm
   // hasn't changed.
@@ -295,6 +303,7 @@ SparseLDLResult<Field> SparseLDL<Field>::RefactorWithFixedSparsityPattern(
 
 template <class Field>
 void SparseLDL<Field>::Solve(BlasMatrixView<Field>* right_hand_sides) const {
+  ScopedEnableFlushToZero scope_guard;
   if (have_equilibration_) {
     // Apply the inverse of the equilibration matrix.
     for (Int j = 0; j < right_hand_sides->width; ++j) {

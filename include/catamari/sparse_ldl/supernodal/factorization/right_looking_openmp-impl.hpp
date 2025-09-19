@@ -261,7 +261,7 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLooking(
 
   // Compute flop-count estimates so that we may prioritize the expensive
   // tasks before the cheaper ones.
-  Buffer<double> work_estimates(num_supernodes);
+  Buffer<double> work_estimates(num_supernodes, 0.0); // Must be zero-initialized!
   for (const Int& root : ordering_.assembly_forest.roots) {
     FillSubtreeWorkEstimates(root, ordering_.assembly_forest, *lower_factor_,
                              &work_estimates);

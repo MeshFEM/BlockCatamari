@@ -338,7 +338,7 @@ inline Int LowerCholeskyFactorization(Int /* block_size */,
   } else if (info == 0) {
     return matrix->height;
   } else {
-    return info;
+    return info - 1; // Leading minor `info` is not positive definite; report `info - 1` successful pivots.
   }
 }
 
@@ -357,7 +357,7 @@ inline Int LowerCholeskyFactorization(Int /* block_size */,
   } else if (info == 0) {
     return matrix->height;
   } else {
-    return info;
+    return info - 1; // Leading minor `info` is not positive definite; report `info - 1` successful pivots.
   }
 }
 
@@ -377,7 +377,7 @@ inline Int LowerCholeskyFactorization(Int /* block_size */,
   } else if (info == 0) {
     return matrix->height;
   } else {
-    return info;
+    return info - 1; // Leading minor `info` is not positive definite; report `info - 1` successful pivots.
   }
 }
 
@@ -397,7 +397,7 @@ inline Int LowerCholeskyFactorization(Int /* block_size */,
   } else if (info == 0) {
     return matrix->height;
   } else {
-    return info;
+    return info - 1; // Leading minor `info` is not positive definite; report `info - 1` successful pivots.
   }
 }
 #endif  // ifdef CATAMARI_HAVE_LAPACK
