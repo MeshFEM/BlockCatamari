@@ -221,23 +221,52 @@ SparseLDLResult<Field> Factorization<Field>::BlockLeftLooking() { // matrix data
     CATAMARI_STOP_TIMER(profile.left_looking_allocate);
 
     SparseLDLResult<Field> result;
-    // for (Int supernode : ordering_.assembly_forest.postorder) {
-    for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
-        CATAMARI_START_TIMER(profile.left_looking_update);
+    if (!control_.record_indefinite_subtrees) {
+        // for (Int supernode : ordering_.assembly_forest.postorder) {
+        for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
+            CATAMARI_START_TIMER(profile.initialize_columns);
+            const Int sno = ordering_.supernode_offsets[supernode];
+            const Int supernode_size = ordering_.supernode_sizes[supernode];
+            BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
 
-        CATAMARI_START_TIMER(profile.initialize_columns);
-        const Int sno = ordering_.supernode_offsets[supernode];
-        const Int supernode_size = ordering_.supernode_sizes[supernode];
-        BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
+            BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block);
+            CATAMARI_STOP_TIMER(profile.initialize_columns);
 
-        BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block);
+            BlockLeftLookingSupernodeUpdate<BlockSize>(supernode, &shared_state, &private_state);
 
-        CATAMARI_STOP_TIMER(profile.initialize_columns);
+            const bool succeeded = LeftLookingSupernodeFinalize(supernode, dynamic_reg_params, &result); // Use regular non-block version (no indexing overhead)
+            if (!succeeded) break;
+        }
+    }
+    else {
+        // Version recording the full tree's indefiniteness information for visualization
+        supernode_indefiniteness_stats_.Resize(num_supernodes);
 
-        BlockLeftLookingSupernodeUpdate<BlockSize>(supernode, &shared_state, &private_state);
+        for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
+            const Int sno = ordering_.supernode_offsets[supernode];
+            const Int supernode_size = ordering_.supernode_sizes[supernode];
+            BlasMatrixView<Field>& diagonal_block = diagonal_factor_->blocks[supernode];
 
-        const bool succeeded = LeftLookingSupernodeFinalize(supernode, dynamic_reg_params, &result); // Use regular non-block version (no indexing overhead)
-        if (!succeeded) break;
+            BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block);
+            BlockLeftLookingSupernodeUpdate<BlockSize>(supernode, &shared_state, &private_state);
+
+            bool indefinite_children = false;
+            const auto &af = ordering_.assembly_forest;
+            const Int child_beg = af.child_offsets[supernode];
+            const Int num_children = af.child_offsets[supernode + 1] - child_beg;
+            for (Int ci = 0; ci < num_children; ++ci) {
+                const Int child = af.children[child_beg + ci];
+                indefinite_children |= supernode_indefiniteness_stats_[child];
+            }
+
+            if (indefinite_children) {
+                supernode_indefiniteness_stats_[supernode] = -1;  // flag as not attempted due to indefinite children.
+                continue;
+            }
+
+            const bool succeeded = LeftLookingSupernodeFinalize(supernode, dynamic_reg_params, &result); // Use regular non-block version (no indexing overhead)
+            supernode_indefiniteness_stats_[supernode] = (succeeded == false);
+        }
     }
 
 #ifdef CATAMARI_DEBUG

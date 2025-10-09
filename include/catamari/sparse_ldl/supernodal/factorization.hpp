@@ -155,6 +155,7 @@ struct Control {
   double min_parallel_threshold = 1e5;
 
   bool legacy = false;
+  bool record_indefinite_subtrees = false; // Use in combination with WriteSupernodeStats; only suppported with BlockLeftLooking
 
 #ifdef CATAMARI_ENABLE_TIMERS
   // The max number of levels of the supernodal tree to visualize timings of.
@@ -749,35 +750,14 @@ class Factorization {
 
   // Only can be called after `InitialFactorizationSetup` because it needs access to
   // the supernode degrees via an allocated `lower_factor_`.
-  void WriteSupernodeStats(const std::string& directory, Int max_levels = std::numeric_limits<Int>::max()) const {
+  void WriteSupernodeStats(const std::string &path, Int max_levels = std::numeric_limits<Int>::max()) const {
       if (factor_values_.Height() == 0) throw std::runtime_error("Factorization not initialized");
       const bool has_work_estimates = work_estimates_.Size() == ordering_.supernode_sizes.Size();
-#if 0
-      auto nodeSizeLabel = [this, has_work_estimates](Int supernode) {
-          Int size = ordering_.supernode_sizes[supernode];
-          const BlasMatrixView<Field> &lower_block = lower_factor_->blocks[supernode];
-          std::stringstream ss;
-          ss << "size: " << size << "\\ndeg: " << lower_block.Height();
-          if (has_work_estimates) ss << "\\nwork: " << work_estimates_[supernode];
-          return ss.str();
-      };
-
-      WriteTruncatedForestToDot(directory + "/supernodes.dot", nodeSizeLabel, ordering_.assembly_forest, max_levels, /* avoid_isolated_roots = */ false);
-
-      // Also visualize the parallel flag
-      for (Int nt = 2; nt < 32; nt *= 2) {
-          double min_parallel_ratio_work = (total_work_ * control_.parallel_ratio_threshold) / nt;
-          double min_parallel_work = std::max(control_.min_parallel_threshold, min_parallel_ratio_work);
-
-          WriteTruncatedForestToDot(directory + "/paralellism_for_nthreads_" + std::to_string(nt) + ".dot",
-              [this, min_parallel_work](Int supernode) { return std::to_string(work_estimates_[supernode] > min_parallel_work); },
-              ordering_.assembly_forest, max_levels, /* avoid_isolated_roots = */ false);
-      }
-#endif
+      const bool has_indefiniteness_stats = supernode_indefiniteness_stats_.Size() == ordering_.supernode_sizes.Size();
 
       // Faster-to-parse format
-      WriteForestWithNodeLabels(directory + "/supernodes.txt",
-              [this, has_work_estimates](Int supernode) {
+      WriteForestWithNodeLabels(path,
+              [this, has_work_estimates, has_indefiniteness_stats](Int supernode) {
                   std::stringstream ss;
                   ss << "{ " << "\"size\": " << ordering_.supernode_sizes[supernode]
                              << ", \"deg\": " << lower_factor_->blocks[supernode].Height();
@@ -795,12 +775,17 @@ class Factorization {
                     }
                     ss << "]";
                   }
+                  if (has_indefiniteness_stats) {
+                    ss << ", \"indefinite\": " << supernode_indefiniteness_stats_[supernode];
+                  }
                   ss << " }";
 
                   return ss.str();
               },
               ordering_.assembly_forest);
   }
+
+  Buffer<int> supernode_indefiniteness_stats_; // recorded only by BlockLeftLooking when `control_.record_indefinite_subtrees == true`
 
  private:
   // The control structure for the factorization.
