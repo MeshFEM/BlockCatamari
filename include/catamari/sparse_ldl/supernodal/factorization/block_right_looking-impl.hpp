@@ -82,6 +82,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         result->num_successful_pivots += num_supernode_pivots;
     }
     if (num_supernode_pivots < supernode_size) {
+        shared_state->setFailed();
         if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
         return false;
     }
