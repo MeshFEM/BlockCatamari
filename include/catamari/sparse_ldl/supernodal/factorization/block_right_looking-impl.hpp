@@ -28,6 +28,17 @@
 
 #define REUSE_CHOLESKY_FLOWGRAPHS 0
 
+// PROCESS_LEAVES_FIRST -- an idefiniteness detection acceleration:
+// In many cases, the indefiniteness of a matrix can be detected
+// already from some of the leaf supernodes nodes. By attempting to factor all
+// leaves, we may be able to exit much earlier than if we wait for the
+// parallel+serial tree traversal to reach an indefinite leaf. In this mode we
+// initialize and factor all the leaf supernodes and then skip those step in
+// the subsequent full factorization stage.
+// This appears to slightly slow down the positive definite case,
+// likely due to memory access patterns.
+#define PROCESS_LEAVES_FIRST 1
+
 namespace catamari {
 namespace supernodal_ldl {
 
@@ -44,9 +55,13 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     const Int degree = lower_block.height;
     const Int supernode_size = lower_block.width;
     const bool has_children = ordering_.assembly_forest.child_offsets[supernode + 1] > ordering_.assembly_forest.child_offsets[supernode];
+    const bool single_thread = shared_state->num_tbb_threads < 2;
+
+#if PROCESS_LEAVES_FIRST
+    if (has_children) { // In PROCESS_LEAVES_FIRST mode, the leaf diagonal blocks were already factored...
+#endif
 
     Int num_supernode_pivots;
-    const bool single_thread = shared_state->num_tbb_threads < 2;
     if (control_.supernodal_pivoting) {
         BlasMatrixView<Int> permutation = SupernodePermutation(supernode);
         num_supernode_pivots = PivotedFactorDiagonalBlock(
@@ -55,7 +70,6 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         result->num_successful_pivots += num_supernode_pivots;
     } else {
         FG_START_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
-#if 1
         if ((diagonal_block.height > 3 * control_.factor_tile_size) && !single_thread) {
 #if REUSE_CHOLESKY_FLOWGRAPHS
             auto &fg = shared_state->cholesky_flowgraphs[supernode];
@@ -72,12 +86,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         } else {
             num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
         }
-#else
-        num_supernode_pivots = FactorDiagonalBlock(
-                control_.block_size,
-                control_.factorization_type, dynamic_reg_params, &diagonal_block,
-                &result->dynamic_regularization);
-#endif
+
         FG_STOP_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
         result->num_successful_pivots += num_supernode_pivots;
     }
@@ -86,6 +95,13 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
         return false;
     }
+
+#if PROCESS_LEAVES_FIRST
+    }
+    else {
+        result->num_successful_pivots += supernode_size; // At this point the leaf must be positive definite, since it was already factored...
+    }
+#endif
 
     IncorporateSupernodeIntoLDLResult(supernode_size, degree, result);
 
@@ -451,8 +467,11 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         }
 
         if (shared_state->hasFailed()) return false; // Stop immediately if another thread encountered a failure!
+
+#if !PROCESS_LEAVES_FIRST // If leaf supernodes were preprocessed, we must not reinitialize their columns in L (diagonal block was already factored)
         if (num_children == 0)
             BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(ordering_.supernode_offsets[supernode], lower_block.width, diagonal_block);
+#endif
 
         allocate_schur_complement(); // TODO: move this after `process_child` if/when we implement an expand-in-place strategy
         for (Int child_index = 0; child_index < num_children; ++child_index) {
@@ -826,6 +845,44 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         else shared_state.tbb_ctx = std::make_unique<tbb::task_group_context>();
     }
     else shared_state.tbb_ctx.reset();
+
+#if PROCESS_LEAVES_FIRST
+    {
+        BENCHMARK_SCOPED_TIMER_SECTION tleaf("Leaf Preprocessing");
+        std::vector<Int> leaves;
+        for (Int s = 0; s < num_supernodes; ++s) {
+            const auto &af = ordering_.assembly_forest;
+            if (af.child_offsets[s + 1] == af.child_offsets[s])
+                leaves.push_back(s);
+        }
+
+        if (control_.supernodal_pivoting) throw std::runtime_error("supernodal pivoting not yet implemented in PROCESS_LEAVES_FIRST mode");
+        auto process_leaf_supernode = [&](const Int s) {
+            BlasMatrixView<Field> lower_block = lower_factor_->blocks[s];
+            BlasMatrixView<Field> diagonal_block = diagonal_factor_->blocks[s];
+            const Int sno = ordering_.supernode_offsets[s];
+            const Int supernode_size = lower_block.width;
+
+            BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block); // TODO: only the diagonal block?
+            Int num_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
+            if (num_pivots < supernode_size) {
+                shared_state.setFailed();
+                if (shared_state.tbb_ctx) shared_state.tbb_ctx->cancel_group_execution();
+                return false;
+            }
+            return true;
+        };
+
+        if (parallel) {
+            tbb::parallel_for(tbb::blocked_range<Int>(0, leaves.size()), [&](const tbb::blocked_range<Int> &r) {
+                for (Int li = r.begin(); li != r.end(); ++li) if (!process_leaf_supernode(leaves[li])) break;
+            }, *(shared_state.tbb_ctx));
+        }
+        else for (Int l : leaves) if (!process_leaf_supernode(l)) break;
+
+        if (shared_state.hasFailed()) return result;
+    }
+#endif
 
     // Recurse on each tree in the elimination forest.
     if (!parallel || num_roots <= 1) {
