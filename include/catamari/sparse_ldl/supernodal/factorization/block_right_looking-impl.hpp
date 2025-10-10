@@ -32,12 +32,13 @@
 // In many cases, the indefiniteness of a matrix can be detected
 // already from some of the leaf supernodes nodes. By attempting to factor all
 // leaves, we may be able to exit much earlier than if we wait for the
-// parallel+serial tree traversal to reach an indefinite leaf. In this mode we
-// initialize and factor all the leaf supernodes and then skip those step in
+// parallel+serial tree traversal to reach an indefinite leaf. In this mode, we
+// initialize and factor all the leaf supernodes and then skip those steps of
 // the subsequent full factorization stage.
-// This appears to slightly slow down the positive definite case,
+// This appears to slightly slow down the positive definite case
+// (and cases where indefiniteness is only detected higher up the tree)
 // likely due to memory access patterns.
-#define PROCESS_LEAVES_FIRST 1
+#define PROCESS_LEAVES_FIRST 0 // Disabled for now due to posdef slowdown...
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -519,13 +520,25 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             });
         }
 #else
-        for (Int child_index = 0; child_index < num_children - 1; ++child_index) {
-            const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
+        const Int *children = ordering_.assembly_forest.children.Data() + child_beg;
+        // We process one of the children inline to reduce scheduling overhead.
+        // *Which* child is processed has an impact. Processing the cheapest
+        // child inline prioritizes drilling down to a leaf quickly, which can
+        // help for fast indefiniteness detection. Unfortunately, this seems to
+        // measurably slow the positive definite case. The same trade-offs are
+        // at play in choosing the first vs last child.
+        // Int inline_child_idx = 0;
+        // double cheapest_work = work_estimates[children[0]];
+        // for (Int ci = 1; ci < num_children; ++ci) { if (work_estimates[children[ci]] < cheapest_work) { cheapest_work = work_estimates[children[ci]]; inline_child_idx = ci; } }
+        const Int inline_child_idx = num_children - 1; // process last child immediately
+        for (Int child_index = 0; child_index < num_children; ++child_index) {
+            if (child_index == inline_child_idx) continue;
+            const Int child = children[child_index];
             tg.run([&process_child, &result_contributions, child, child_index, shared_state]() {
                     process_child(child, &result_contributions[child_index], nullptr);
             });
         }
-        process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
+        process_child(children[inline_child_idx], &result_contributions[inline_child_idx], nullptr);
 #endif
         auto status = tg.wait();
 
