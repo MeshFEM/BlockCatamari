@@ -20,7 +20,7 @@ if (CATAMARI_WITH_OPENMP)
     find_package(OpenMP REQUIRED)
 endif()
 
-option(CATAMARI_INT64 "Use 64 bit integers" ON)
+option(CATAMARI_INT64 "Use 64 bit integers" OFF)
 
 ################################################################################
 # Bring in `mimalloc` to accelerate Schur complement memory allocation.
@@ -50,7 +50,7 @@ if (NOT TARGET catamari)
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         target_compile_definitions(catamari INTERFACE -DDARWIN -DARM -DCATAMARI_HAVE_FENV_DISABLE_DENORMS -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK)
     elseif  (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-        target_compile_definitions(catamari INTERFACE -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DX86 -DLINUX -DCATAMARI_HAVE_XMMINTRIN -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DCATAMARI_HAVE_MKL -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK)
+        target_compile_definitions(catamari INTERFACE -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DX86 -DLINUX -DCATAMARI_HAVE_XMMINTRIN -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DCATAMARI_HAVE_MKL -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK) # -DMKL_DIRECT_CALL_SEQ) # DIRECT_CALL seems not to make much of a difference
         target_include_directories(catamari SYSTEM INTERFACE /usr/include/mkl) # Needed for Ubuntu MKL
     else()
         message(FATAL_ERROR "Unrecognized CMAKE_SYSTEM_NAME")
