@@ -147,6 +147,7 @@ void Factorization<Field>::Solve(
 }
 
 template <class Field>
+template<Int BLOCK_SIZE>
 void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     Buffer<Field>* workspace) const {
@@ -154,13 +155,14 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   const Int num_rhs = right_hand_sides->width;
   const bool is_cholesky =
       control_.factorization_type == kCholeskyFactorization;
-  const ConstBlasMatrixView<Field> triangular_right_hand_sides =
-      diagonal_factor_->blocks[supernode];
+  const ConstBlasMatrixView<Field> diag_block = diagonal_factor_->blocks[supernode];
 
   const Int supernode_size = ordering_.supernode_sizes[supernode];
   const Int supernode_start = ordering_.supernode_offsets[supernode];
   BlasMatrixView<Field> right_hand_sides_supernode =
       right_hand_sides->Submatrix(supernode_start, 0, supernode_size, num_rhs);
+
+  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
 
   // Solve against the diagonal block of the supernode.
   if (control_.supernodal_pivoting) {
@@ -170,15 +172,26 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   }
   if (is_cholesky) {
     if (right_hand_sides_supernode.width > 1)
-        LeftLowerTriangularSolves(triangular_right_hand_sides,
-                                 &right_hand_sides_supernode);
-    else
-        TriangularSolveLeftLower(triangular_right_hand_sides,
-                                 right_hand_sides_supernode.Data());
+        LeftLowerTriangularSolves(diag_block, &right_hand_sides_supernode);
+    else {
+        if (supernode_size < 20) {
+          Field * __restrict__ b = right_hand_sides_supernode.Data();
+          const Field *__restrict__ triang_column = diag_block.Data();
+          for (Int j = 0; j < supernode_size; ++j) {
+            b[j] /= triang_column[j];
+            const Field eta = b[j];
+            for (Int i = j + 1; i < supernode_size; ++i)
+              b[i] -= triang_column[i] * eta;
+          }
+          triang_column += diag_block.leading_dim;
+        }
+        else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
+    }
   } else {
-    LeftLowerUnitTriangularSolves(triangular_right_hand_sides,
-                                  &right_hand_sides_supernode);
+    LeftLowerUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
   }
+
+  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
 
   const ConstBlasMatrixView<Field> subdiagonal =
       lower_factor_->blocks[supernode];
@@ -196,9 +209,11 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
 #if defined(__APPLE__)
   static constexpr bool out_of_place = false;
 #else
-  static constexpr bool out_of_place = true;
+  // static constexpr bool out_of_place = true;
+  bool out_of_place = supernode_size >= control_.forward_solve_out_of_place_supernode_threshold;
 #endif
   if (out_of_place) {
+    FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
     // Perform an out-of-place GEMM.
     BlasMatrixView<Field> work_right_hand_sides;
     work_right_hand_sides.height = subdiagonal.height;
@@ -206,20 +221,27 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     work_right_hand_sides.leading_dim = subdiagonal.height;
     work_right_hand_sides.data = workspace->Data();
 
+#if 1
     // Store the updates in the workspace.
     MatrixMultiplyNormalNormal(Field{1}, subdiagonal,
                                right_hand_sides_supernode.ToConst(), Field{0},
                                &work_right_hand_sides);
+#else
+    MatrixVectorProduct(Field{1}, subdiagonal, right_hand_sides_supernode.Data(), work_right_hand_sides.data);
+#endif
 
     // Accumulate the workspace into the solution right_hand_sides.
     for (Int j = 0; j < num_rhs; ++j) {
             Field * rhs_ptr = right_hand_sides->Pointer(0, j);
       const Field *wrhs_ptr = work_right_hand_sides.Pointer(0, j);
-      for (Int i = 0; i < subdiagonal.height; ++i) {
-        rhs_ptr[indices[i]] -= wrhs_ptr[i];
+      for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
+        using Vec = VecN_T<Field, BLOCK_SIZE>; // TODO: evaluate add_strip version with restrict pointer, not using Eigen.
+        Eigen::Map<Vec>(rhs_ptr + indices[i]) -= Eigen::Map<const Vec>(wrhs_ptr + i);
       }
     }
+    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
   } else {
+    FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceForwardsubUpdate);
     for (Int j = 0; j < num_rhs; ++j) {
       const Field *srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
             Field * rhs_ptr = right_hand_sides->         Pointer(0, j);
@@ -276,6 +298,7 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
       }
 #endif
 #endif
+    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceForwardsubUpdate);
     }
   }
 }
@@ -400,7 +423,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       static constexpr bool out_of_place = false;
       // bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
 #else
-      static constexpr bool out_of_place = true;
+      // static constexpr bool out_of_place = true;
+      bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
 #endif
     if (out_of_place) {
       FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
@@ -408,9 +432,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
               Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
-        using VecBlock = VecN_T<Field, BLOCK_SIZE>;
         for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
-          const Field * src = rhs_ptr + indices[i];
+          const Field *src = rhs_ptr + indices[i];
           for (Int c = 0; c < BLOCK_SIZE; ++c)
             *(wrhs_ptr++) = *(src++);
         }
@@ -429,8 +452,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     } else {
       FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
       for (Int j = 0; j < num_rhs; ++j) {
-        const Field * const  rhs_ptr = right_hand_sides         ->Pointer(0, j);
-              Field * const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
+        const Field * __restrict__ const  rhs_ptr = right_hand_sides         ->Pointer(0, j);
+              Field * __restrict__ const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
 #if 1
         if (is_selfadjoint) {
             constexpr Int CHUNK_SIZE = 6;
@@ -506,21 +529,31 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
   FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
 
   // Solve against the diagonal block of this supernode.
-  const ConstBlasMatrixView<Field> triangular_right_hand_sides =
-      diagonal_factor_->blocks[supernode];
+  const ConstBlasMatrixView<Field> diag_block = diagonal_factor_->blocks[supernode];
   if (control_.factorization_type == kCholeskyFactorization) {
     if (right_hand_sides_supernode.width > 1) {
-        LeftLowerAdjointTriangularSolves(triangular_right_hand_sides, &right_hand_sides_supernode);
+        LeftLowerAdjointTriangularSolves(diag_block, &right_hand_sides_supernode);
     }
     else {
-        TriangularSolveLeftLowerAdjoint(triangular_right_hand_sides, right_hand_sides_supernode.Data());
+        if (supernode_size < 20) {
+          Field * __restrict__ b = right_hand_sides_supernode.Data();
+          const Field * __restrict__ triang_column = diag_block.Pointer(0, supernode_size - 1);
+          for (Int j = supernode_size - 1; j >= 0; --j) {
+            Field eta = b[j];
+            for (Int i = j + 1; i < supernode_size; ++i) {
+              eta -= Conjugate(triang_column[i]) * b[i];
+            }
+            eta /= Conjugate(triang_column[j]);
+            b[j] = eta;
+            triang_column -= diag_block.leading_dim;
+          }
+        }
+        else TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
     }
   } else if (control_.factorization_type == kLDLAdjointFactorization) {
-    LeftLowerAdjointUnitTriangularSolves(triangular_right_hand_sides,
-                                         &right_hand_sides_supernode);
+    LeftLowerAdjointUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
   } else {
-    LeftLowerTransposeUnitTriangularSolves(triangular_right_hand_sides,
-                                           &right_hand_sides_supernode);
+    LeftLowerTransposeUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
   }
   if (control_.supernodal_pivoting) {
     const ConstBlasMatrixView<Int> permutation =
@@ -571,10 +604,8 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
 #else
   // Any pre-order will do
   const Int num_supernodes = ordering_.supernode_sizes.Size();
-  for (Int s = num_supernodes - 1; s >= 0; --s) {
-      LowerTransposeSupernodalTrapezoidalSolve(s, right_hand_sides,
-                                               &packed_input_buf);
-  }
+  for (Int s = num_supernodes - 1; s >= 0; --s)
+      LowerTransposeSupernodalTrapezoidalSolve(s, right_hand_sides, &packed_input_buf);
 #endif
 }
 

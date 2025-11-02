@@ -120,13 +120,13 @@ struct Control {
   // have shown the out-of-place update to be always faster than using
   // Accelerate BLAS on Apple Silicon and always slower than MKL on x86
 
-  // // The minimal supernode size for an out-of-place trapezoidal solve to be
-  // // used.
-  // Int forward_solve_out_of_place_supernode_threshold = 20;
+  // The minimal supernode size for an out-of-place trapezoidal solve to be
+  // used.
+  Int forward_solve_out_of_place_supernode_threshold = 10;
 
-  // // The minimal supernode size for an out-of-place trapezoidal solve to be
-  // // used.
-  // Int backward_solve_out_of_place_supernode_threshold = 30;
+  // The minimal supernode size for an out-of-place trapezoidal solve to be
+  // used.
+  Int backward_solve_out_of_place_supernode_threshold = 10;
 
   // The algorithmic block size for the factorization.
   Int block_size = 64;
@@ -969,6 +969,7 @@ private:
       SolveSharedState* shared_state, int level) const;
 
   // Performs the trapezoidal solve associated with a particular supernode.
+  template<Int BLOCK_SIZE = 1>
   void LowerSupernodalTrapezoidalSolve(Int supernode,
                                        BlasMatrixView<Field>* right_hand_sides,
                                        Buffer<Field>* workspace) const;

@@ -153,7 +153,7 @@ struct FineGrainedTimersFactorize {
 
 struct FineGrainedTimersSolve {
   // Fine-grained timers accumulated per-supernode (threadsafe) for the solve phase.
-  enum Type { MergeChildContributions = 0,  SolveDiag, MultiplySubdiagonal, OutOfPlaceBacksubUpdate, InPlaceBacksubUpdate, NumTimers };
+  enum Type { MergeChildContributions = 0,  SolveDiag, MultiplySubdiagonal, OutOfPlaceBacksubUpdate, InPlaceBacksubUpdate, OutOfPlaceForwardsubUpdate, InPlaceForwardsubUpdate, NumTimers };
   std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
   Buffer<Int> assigned_thread;
 
@@ -164,6 +164,8 @@ struct FineGrainedTimersSolve {
       case MultiplySubdiagonal:     return "MultiplySubdiagonal";
       case OutOfPlaceBacksubUpdate: return "OutOfPlaceBacksubUpdate";
       case InPlaceBacksubUpdate:    return "InPlaceBacksubUpdate";
+      case OutOfPlaceForwardsubUpdate: return "OutOfPlaceForwardsubUpdate";
+      case InPlaceForwardsubUpdate:    return "InPlaceForwardsubUpdate";
       case NumTimers:
       default:                      return "Unknown";
     }

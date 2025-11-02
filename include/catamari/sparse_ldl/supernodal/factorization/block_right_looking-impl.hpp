@@ -273,9 +273,13 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
         // Parallelize for very large supernodes (especially roots with no/limited parallelism)
 #if PARALLELIZE_MERGE_INTO_SUPERNODE
         if (supernode_size > 512) {
+            // Inserting this timer is, in a sense, double-counting because `BlockMergeChildSchurComplements` is called from within the `MergeSchurInPara` timer. We'd need more timers to disentangle this time properly and still time the merges in a threadsafe way.
+            // The extra timers could be done using local stack variables that get accumulated to the supernode's timers, but we need to define some more macros for this.
+            // FG_START_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
             tbb::parallel_for(tbb::blocked_range<Int>(0, supernode_size / BlockSize), [&](const tbb::blocked_range<Int> &r) {
                 ldl.template BlockCPlanInitializeFactorColumns<BlockSize>(sno, BlockSize * r.begin(), BlockSize * r.end(), diagonal_block);
             }, *(shared_state->tbb_ctx));
+            // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
 
             for (Int ci = 0; ci < num_children; ++ci) {
                 const Int child = af.children[child_beg + ci];
