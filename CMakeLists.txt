@@ -32,11 +32,10 @@ FetchContent_Declare(
   GIT_TAG dfa50c37d951128b1e77167dd9291081aa88eea4
 )
 
-# Optionally override mimalloc options before build
 set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
 set(MI_BUILD_SHARED ON  CACHE BOOL "" FORCE)
 set(MI_BUILD_STATIC OFF CACHE BOOL "" FORCE)
-set(MI_OVERRIDE     OFF CACHE BOOL "" FORCE)
+set(MI_OVERRIDE     OFF CACHE BOOL "" FORCE) # Don't replace all malloc/free calls! That degrades performance; mi_malloc must be used selectively.
 
 FetchContent_MakeAvailable(mimalloc)
 
