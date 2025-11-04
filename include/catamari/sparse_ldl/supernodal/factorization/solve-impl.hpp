@@ -20,6 +20,8 @@
 #include "catamari/sparse_ldl/supernodal/factorization.hpp"
 #include <MeshFEM/Parallelism.hh>
 
+#include "trs_kernels.hpp"
+
 // Avoid repeated memory allocation/deallocation when applying permutations
 // (at the cost of `right_hand_sides` worth of memory).
 #define SOLVE_PERMUTE_SCRATCH 1
@@ -174,7 +176,8 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     if (right_hand_sides_supernode.width > 1)
         LeftLowerTriangularSolves(diag_block, &right_hand_sides_supernode);
     else {
-        if (supernode_size < 20) {
+#if 1
+        if (supernode_size < 8) {
           Field * __restrict__ b = right_hand_sides_supernode.Data();
           const Field *__restrict__ triang_column = diag_block.Data();
           for (Int j = 0; j < supernode_size; ++j) {
@@ -182,10 +185,13 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
             const Field eta = b[j];
             for (Int i = j + 1; i < supernode_size; ++i)
               b[i] -= triang_column[i] * eta;
+            triang_column += diag_block.leading_dim;
           }
-          triang_column += diag_block.leading_dim;
         }
         else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
+#else
+        TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
+#endif
     }
   } else {
     LeftLowerUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
@@ -207,7 +213,8 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   //        if (supernode_size >= control_.forward_solve_out_of_place_supernode_threshold) {
   const Int* indices = lower_factor_->StructureBeg(supernode);
 #if defined(__APPLE__)
-  static constexpr bool out_of_place = false;
+  // static constexpr bool out_of_place = false;
+  bool out_of_place = supernode_size >= 64;
 #else
   // static constexpr bool out_of_place = true;
   bool out_of_place = supernode_size >= control_.forward_solve_out_of_place_supernode_threshold;
@@ -242,64 +249,11 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
   } else {
     FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceForwardsubUpdate);
-    for (Int j = 0; j < num_rhs; ++j) {
-      const Field *srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
-            Field * rhs_ptr = right_hand_sides->         Pointer(0, j);
-#if 0
-      for (Int k = 0; k < supernode_size; ++k) {
-        const Field eta = srhs_ptr[k];
-        const Field *subdiag_ptr = subdiagonal.Pointer(0, k);
-        for (Int i = 0; i < subdiagonal.height; ++i)
-          rhs_ptr[indices[i]] -= subdiag_ptr[i] * eta;
-      }
-#else
-      // Julian Panetta: this ordering is measurably faster...
-      //  for (Int i = 0; i < subdiagonal.height; ++i) {
-      //     Field val = 0;
-      //     for (Int k = 0; k < supernode_size; ++k)
-      //       val += subdiagonal(i, k) * srhs_ptr[k];
-      //     rhs_ptr[indices[i]] -= val;
-      //  }
-
-#if 1
-      constexpr Int CHUNK_SIZE = 4;
-      using Vec = VecN_T<Field, CHUNK_SIZE>;
-      Int i;
-      for (i = 0; i <= subdiagonal.height - CHUNK_SIZE; i += CHUNK_SIZE) {
-         Vec val = Eigen::Map<const Vec>(subdiagonal.Pointer(i, 0)) * srhs_ptr[0];
-         for (Int k = 1; k < supernode_size; ++k)
-             val += Eigen::Map<const Vec>(subdiagonal.Pointer(i, k)) * srhs_ptr[k];
-         rhs_ptr[indices[i + 0]] -= val[0];
-         rhs_ptr[indices[i + 1]] -= val[1];
-         rhs_ptr[indices[i + 2]] -= val[2];
-         rhs_ptr[indices[i + 3]] -= val[3];
-         // rhs_ptr[indices[i + 4]] -= val[4];
-         // rhs_ptr[indices[i + 5]] -= val[5];
-         // rhs_ptr[indices[i + 6]] -= val[6];
-         // rhs_ptr[indices[i + 7]] -= val[7];
-      }
-      for (; i < subdiagonal.height; ++i) {
-         Field val = subdiagonal(i, 0) * srhs_ptr[0];
-         for (Int k = 1; k < supernode_size; ++k)
-             val += subdiagonal(i, k) * srhs_ptr[k];
-         rhs_ptr[indices[i]] -= val;
-      }
-#else
-      const Field *subd_ptr_base = subdiagonal.data;
-      for (Int i = 0; i < subdiagonal.height; ++i) {
-        const Field *subd_ptr = subd_ptr_base;
-        Field val = (*subd_ptr) * srhs_ptr[0];
-        for (Int k = 1; k < supernode_size; ++k) {
-          subd_ptr += subdiagonal.leading_dim;
-          val += (*subd_ptr) * srhs_ptr[k];
-        }
-        rhs_ptr[indices[i]] -= val;
-        ++subd_ptr_base;
-      }
-#endif
-#endif
+    trs_kernels::MultiplyLowerBlock<Field, BLOCK_SIZE>::run(
+        indices, supernode_start, supernode_size, subdiagonal.height,
+        subdiagonal.data, subdiagonal.leading_dim, num_rhs,
+        right_hand_sides->data, right_hand_sides->leading_dim);
     FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceForwardsubUpdate);
-    }
   }
 }
 
@@ -420,8 +374,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     // using the original threshold rule:
     //      if (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) {
 #if defined(__APPLE__)
-      static constexpr bool out_of_place = false;
-      // bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
+      // static constexpr bool out_of_place = false;
+      bool out_of_place = supernode_size >= 64;
 #else
       // static constexpr bool out_of_place = true;
       bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
@@ -451,77 +405,10 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
     } else {
       FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
-      for (Int j = 0; j < num_rhs; ++j) {
-        const Field * __restrict__ const  rhs_ptr = right_hand_sides         ->Pointer(0, j);
-              Field * __restrict__ const srhs_ptr = right_hand_sides_supernode.Pointer(0, j);
-#if 1
-        if (is_selfadjoint) {
-            constexpr Int CHUNK_SIZE = 6;
-            using Vec = VecN_T<Field, CHUNK_SIZE>;
-            Int k;
-            using VecBlock = VecN_T<Field, BLOCK_SIZE>;
-            using Block = Eigen::Matrix<Field, BLOCK_SIZE, CHUNK_SIZE>;
-            // Eigen::Stride Gotcha: for single-row matrices, even in column
-            // major format, it is the **inner stride** that is used to
-            // determine the pointer increment between consecutive entries.
-            // However, with 2 or more rows, it is the outer stride, as one
-            // would expect.
-            // See also: https://gitlab.com/libeigen/eigen/-/issues/416#note_709598886
-            //           https://eigen.tuxfamily.org/bz/show_bug.cgi?id=416#c9
-            using Stride = std::conditional_t<BLOCK_SIZE == 1, Eigen::InnerStride<>, Eigen::OuterStride<>>;
-            using BMap = Eigen::Map<const Block, 0, Stride>;
-            for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
-              Vec val = Vec::Zero();
-              for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
-                // for (int c = 0; c < BLOCK_SIZE; ++c)
-                //     assert(indices[i + c] == indices[i] + c);
-                val += BMap(subdiagonal.Pointer(i, k), BLOCK_SIZE, CHUNK_SIZE, Stride(subdiagonal.leading_dim)).adjoint()
-                            * Eigen::Map<const VecBlock>(rhs_ptr + indices[i]);
-              }
-              Eigen::Map<Vec>(srhs_ptr + k) -= val;
-            }
-            for (; k < supernode_size; ++k) {
-              Field val = 0;
-              for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
-                val += Eigen::Map<const VecBlock>(subdiagonal.Pointer(i, k)).dot(Eigen::Map<const VecBlock>(rhs_ptr + indices[i]));
-              }
-              srhs_ptr[k] -= val;
-            }
-        }
-        else {
-            constexpr Int CHUNK_SIZE = 6;
-            using Vec = VecN_T<Field, CHUNK_SIZE>;
-            Int k;
-            for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
-              Vec val = rhs_ptr[indices[0]] * Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(0, k), Eigen::InnerStride<>(subdiagonal.leading_dim));
-              for (Int i = 1; i < subdiagonal.height; ++i) {
-                Vec c = Eigen::Map<const Vec, 0, Eigen::InnerStride<>>(subdiagonal.Pointer(i, k), Eigen::InnerStride<>(subdiagonal.leading_dim));
-                val += rhs_ptr[indices[i]] * c;
-              }
-              Eigen::Map<Vec>(srhs_ptr + k) -= val;
-            }
-            for (; k < supernode_size; ++k) {
-              Field val = 0;
-              for (Int i = 0; i < subdiagonal.height; ++i) {
-                val += subdiagonal(i, k) * rhs_ptr[indices[i]];
-              }
-              srhs_ptr[k] -= val;
-            }
-        }
-#else
-        for (Int k = 0; k < supernode_size; ++k) {
-          const Field *subdiagonal_ptr = subdiagonal.Pointer(0, k);
-          Field val = 0;
-          for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
-            const Field *sdp = subdiagonal_ptr + i;
-            const Field *rhsp = rhs_ptr + indices[i];
-            for (Int c = 0; c < BLOCK_SIZE; ++c)
-                val += *(sdp++) * *(rhsp++);
-          }
-          srhs_ptr[k] -= val;
-        }
-#endif
-      }
+      trs_kernels::MultiplyLowerBlockAdjoint<Field, BLOCK_SIZE>::run(
+              is_selfadjoint, indices, supernode_start, supernode_size, subdiagonal.height,
+              subdiagonal.data, subdiagonal.leading_dim,
+              num_rhs, right_hand_sides->data, right_hand_sides->leading_dim);
       FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
     }
   }
@@ -535,20 +422,23 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
         LeftLowerAdjointTriangularSolves(diag_block, &right_hand_sides_supernode);
     }
     else {
-        if (supernode_size < 20) {
+#if 1
+        if (supernode_size < 8) {
           Field * __restrict__ b = right_hand_sides_supernode.Data();
           const Field * __restrict__ triang_column = diag_block.Pointer(0, supernode_size - 1);
           for (Int j = supernode_size - 1; j >= 0; --j) {
             Field eta = b[j];
-            for (Int i = j + 1; i < supernode_size; ++i) {
+            for (Int i = j + 1; i < supernode_size; ++i)
               eta -= Conjugate(triang_column[i]) * b[i];
-            }
             eta /= Conjugate(triang_column[j]);
             b[j] = eta;
             triang_column -= diag_block.leading_dim;
           }
         }
         else TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
+#else
+        TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
+#endif
     }
   } else if (control_.factorization_type == kLDLAdjointFactorization) {
     LeftLowerAdjointUnitTriangularSolves(diag_block, &right_hand_sides_supernode);

@@ -90,7 +90,7 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
       OpenMPLowerTriangularSolveRecursion<BLOCK_SIZE>(child, right_hand_sides, shared_state, level + 1);
   };
 
-  if ((child_end - child_beg) > 1 && (level < 4)) { // JP: avoid excessively fine-grained parallelism; TODO: use flop-based threshold
+  if ((child_end - child_beg) > 1 && (level < 8)) { // JP: avoid excessively fine-grained parallelism; TODO: use flop-based threshold
       tbb::task_group group;
       for (Int child_index = child_beg; child_index < child_end - 1; ++child_index) {
           group.run([&processChild, child_index]() { processChild(child_index); });
@@ -129,14 +129,14 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     const Int child_degree = child_right_hand_sides.height;
     assert(child_degree == ordering_.assembly_forest.child_rel_indices_offsets[child + 1] - ordering_.assembly_forest.child_rel_indices_offsets[child]);
 
-    const Int &num_child_diag_indices = ordering_.assembly_forest.num_child_diag_indices[child];
+    const Int  num_child_diag_indices = ordering_.assembly_forest.num_child_diag_indices[child];
     const Int *child_rel_indices      = ordering_.assembly_forest.child_rel_indices.Data() + ordering_.assembly_forest.child_rel_indices_offsets[child];
 
 #if 1
     for (Int j = 0; j < num_rhs; ++j) {
-        const Field* crhs_col = child_right_hand_sides.Pointer(0, j);
-        Field*        rhs_col = right_hand_sides->Pointer(0, j);
-        Field*       mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
+        const Field* __restrict__ crhs_col = child_right_hand_sides.Pointer(0, j);
+        Field*       __restrict__  rhs_col = right_hand_sides->Pointer(0, j);
+        Field*       __restrict__ mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
         using VecBlock  = VecN_T<Field, BLOCK_SIZE>;
 
         for (Int i = 0; i < num_child_diag_indices; i += BLOCK_SIZE) {
@@ -250,7 +250,7 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolveRecursion(
     const Int child_beg = ordering_.assembly_forest.child_offsets[supernode];
     const Int child_end = ordering_.assembly_forest.child_offsets[supernode + 1];
     const Int numChildren = child_end - child_beg;
-    if (numChildren <= 1 || level > 5) { // Avoid excessive numbers of small tasks.
+    if (numChildren <= 1 || level > 9) { // Avoid excessive numbers of small tasks.
         for (Int child_index = child_beg; child_index < child_end; ++child_index)
             processChild(child_index);
         return;
