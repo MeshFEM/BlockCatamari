@@ -551,7 +551,7 @@ class Factorization {
 
   void OpenMPDiagonalSolve(BlasMatrixView<Field>* right_hand_sides) const;
 
-  // Solves a set of linear systems using the trasnpose (or adjoint) of the
+  // Solves a set of linear systems using the transpose (or adjoint) of the
   // lower-triangular factor.
   template<Int BLOCK_SIZE>
   void LowerTransposeTriangularSolve(BlasMatrixView<Field>* right_hand_sides) const;

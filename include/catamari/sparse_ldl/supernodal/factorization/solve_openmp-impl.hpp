@@ -53,7 +53,7 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
     if (right_hand_sides_supernode.width > 1)
         LeftLowerTriangularSolves(diag_block, &right_hand_sides_supernode);
     else
-        if (supernode_size < 128)
+        if (supernode_size < 24)
           trs_kernels::SolveLowerTri<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
     else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
   } else {
