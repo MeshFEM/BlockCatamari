@@ -3388,9 +3388,9 @@ void Permute(const Perm &permutation, const BlasMatrixView<Field> &in, BlasMatri
 
 // Out-of-place inverse permutation
 // Perm can be, e.g., Buffer<Int>, ConstBlasMatrixView<Int>
-template <Int BLOCK_SIZE = 1, class Perm, class Field>
+template <Int BLOCK_SIZE, class Perm, class Field>
 void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatrixView<Field> *out) {
-    BENCHMARK_SCOPED_TIMER_SECTION timer("InversePermute");
+    BENCHMARK_SCOPED_TIMER_SECTION timer("InversePermute<" + std::to_string(BLOCK_SIZE) + ">");
     if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
     for (Int j = 0; j < out->width; ++j) {
         // Apply the permutation.
@@ -3410,10 +3410,20 @@ void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatr
            }
         };
 
+#if 1
         if (blockHeight > 4096) {
             tbb::parallel_for(tbb::blocked_range<Int>(0, blockHeight, 2048), permute_range);
-        } else permute_range(tbb::blocked_range<Int>(0, blockHeight));
+        } else
+#endif
+		permute_range(tbb::blocked_range<Int>(0, blockHeight));
     }
+}
+
+template <class Perm, class Field>
+void InversePermute(const Int block_size, const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatrixView<Field> *out) {
+    if      (block_size == 3) InversePermute<3>(iperm, in, out);
+    else if (block_size == 2) InversePermute<2>(iperm, in, out);
+    else                      InversePermute<1>(iperm, in, out);
 }
 
 template <class Field>

@@ -56,18 +56,17 @@ struct MultiplyLowerBlockAdjoint<double, BLOCK_SIZE> { // Optimized kernel for d
              const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
              const double * __restrict__ A_data, const Int A_leading_dim,
              const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        // if (supernode_size < 8) {
-        //     MultiplyLowerBlockAdjointSmall<BLOCK_SIZE>::run(
-        //         I, supernode_start, supernode_size, degree,
-        //         A_data, A_leading_dim,
-        //         num_rhs, B_data, B_leading_dim);
-        // }
-        // else {
+#if 1
             MultiplyLowerBlockAdjointEigenChunked<BLOCK_SIZE>::run(
                 I, supernode_start, supernode_size, degree,
                 A_data, A_leading_dim,
                 num_rhs, B_data, B_leading_dim);
-        // }
+#else
+            MultiplyLowerBlockAdjointSmall<BLOCK_SIZE>::run(
+                I, supernode_start, supernode_size, degree,
+                A_data, A_leading_dim,
+                num_rhs, B_data, B_leading_dim);
+#endif
     }
 };
 
@@ -152,6 +151,43 @@ struct MultiplyLowerBlockAdjointSmall { // Optimized kernel for double
     }
 };
 
+template<>
+struct MultiplyLowerBlockAdjointSmall<2> {
+    static void run(
+             const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
+             const double * __restrict__ A_data, const Int A_leading_dim,
+             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
+        double * __restrict__ b_col = B_data;
+        for (Int j = 0; j < num_rhs; ++j) {
+            double * __restrict__ b_col_supernode = b_col + supernode_start;
+#if 0
+            Eigen::Map<Eigen::VectorXd> b_map(b_col_supernode, supernode_size);
+            for (Int i = 0; i < degree; i += 2) {
+                const double * __restrict__ a_ptr = A_data + i;
+                const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i]);
+                Eigen::Map<const Eigen::Matrix<double, 2, Eigen::Dynamic>, 0, Eigen::OuterStride<>> A_map(a_ptr, 2, supernode_size, Eigen::OuterStride<>(A_leading_dim));
+                b_map -= A_map.transpose() * b_strip;
+            }
+#else
+            for (Int i = 0; i < degree; i += 2) {
+                const double * __restrict__ a_ptr = A_data + i;
+                const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i]);
+
+                for (Int k = 0; k < supernode_size; k += 2) {
+                    Mat2_T<double> A_block;
+                    A_block(0, 0) = a_ptr[0];
+                    A_block(1, 0) = a_ptr[1];
+                    A_block(0, 1) = a_ptr[A_leading_dim];
+                    A_block(1, 1) = a_ptr[A_leading_dim + 1];
+                    Eigen::Map<Vec2_T<double>>(b_col_supernode + k) -= A_block.transpose() * b_strip;
+                    a_ptr += 2 * A_leading_dim;
+                }
+            }
+#endif
+            b_col += B_leading_dim;
+        }
+    }
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // MultiplyLowerBlock
@@ -267,6 +303,178 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
     }
 };
 #endif
+
+////////////////////////////////////////////////////////////////////////////////
+// SolveLowerTri
+////////////////////////////////////////////////////////////////////////////////
+// Execute `b = L \ b`
+////////////////////////////////////////////////////////////////////////////////
+template<class Field, Int BLOCK_SIZE>
+struct SolveLowerTri {
+    static void run(const Int supernode_size,
+             const Field * __restrict__ L_data, const Int L_leading_dim,
+             Field * __restrict__ b) {
+        const Field *__restrict__ L_col = L_data;
+        for (Int j = 0; j < supernode_size; ++j) {
+            b[j] /= L_col[j];
+            const Field eta = b[j];
+            for (Int i = j + 1; i < supernode_size; ++i)
+                b[i] -= L_col[i] * eta;
+            L_col += L_leading_dim;
+        }
+    }
+};
+
+template<>
+struct SolveLowerTri<double, 2> {
+    static void run(const Int supernode_size,
+             const double * __restrict__ L_data, const Int L_leading_dim,
+             double * __restrict__ b) {
+        const double *__restrict__ L_col_a = L_data;
+        const double *__restrict__ L_col_b = L_data + L_leading_dim;
+        using V2d = Vec2_T<double>;
+        using  VMap = Eigen::Map<      V2d, Eigen::Aligned16>;
+        using CVMap = Eigen::Map<const V2d, Eigen::Aligned16>;
+
+        for (Int j = 0; j < supernode_size; j += 2) {
+            VMap eta(b + j);
+            CVMap L_col_strip_a(L_col_a + j);
+
+            eta[0] /= L_col_strip_a[0];
+            eta[1] -= eta[0] * L_col_strip_a[1];
+            eta[1] /= L_col_b[j + 1];
+
+            for (Int i = j + 2; i < supernode_size; i += 2)
+                VMap(b + i) -= CVMap(L_col_a + i) * eta[0] + CVMap(L_col_b + i) * eta[1];
+            L_col_a += L_leading_dim * 2;
+            L_col_b += L_leading_dim * 2;
+        }
+    }
+};
+
+template<>
+struct SolveLowerTri<double, 3> {
+    static void run(const Int supernode_size,
+             const double * __restrict__ L_data, const Int L_leading_dim,
+             double * __restrict__ b) {
+        const double *__restrict__ L_col_a = L_data;
+        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
+        const double *__restrict__ L_col_c = L_col_b + L_leading_dim;
+        using V3d = Vec3_T<double>;
+        using  VMap = Eigen::Map<      V3d>;
+        using CVMap = Eigen::Map<const V3d>;
+
+        for (Int j = 0; j < supernode_size; j += 3) {
+            VMap eta(b + j);
+            CVMap L_col_strip_a(L_col_a + j);
+
+            eta[0] /= L_col_strip_a[0];
+            eta[1] -= eta[0] * L_col_strip_a[1];
+            eta[1] /= L_col_b[j + 1];
+            eta[2] -= eta[0] * L_col_strip_a[2] + eta[1] * L_col_b[j + 2];
+            eta[2] /= L_col_c[j + 2];
+
+            for (Int i = j + 3; i < supernode_size; i += 3)
+                VMap(b + i) -= CVMap(L_col_a + i) * eta[0] + CVMap(L_col_b + i) * eta[1] + CVMap(L_col_c + i) * eta[2];;
+            L_col_a += L_leading_dim * 3;
+            L_col_b += L_leading_dim * 3;
+            L_col_c += L_leading_dim * 3;
+        }
+    }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// SolveLowerTriAdjoint
+////////////////////////////////////////////////////////////////////////////////
+// Execute `b = L^H \ b`
+////////////////////////////////////////////////////////////////////////////////
+template<class Field, Int BLOCK_SIZE>
+struct SolveLowerTriAdjoint {
+    static void run(const Int supernode_size,
+            const Field * __restrict__ L_data, const Int L_leading_dim,
+            Field * __restrict__ b) {
+        const Field * __restrict__ L_col = L_data + (supernode_size - 1) * L_leading_dim;
+        for (Int j = supernode_size - 1; j >= 0; --j) {
+            Field eta = b[j];
+            for (Int i = j + 1; i < supernode_size; ++i)
+                eta -= Conjugate(L_col[i]) * b[i];
+            eta /= Conjugate(L_col[j]);
+            b[j] = eta;
+            L_col -= L_leading_dim;
+        }
+    }
+};
+
+template<>
+struct SolveLowerTriAdjoint<double, 2> {
+    static void run(const Int supernode_size,
+             const double * __restrict__ L_data, const Int L_leading_dim,
+             double * __restrict__ b) {
+        const double *__restrict__ L_col_a = L_data + L_leading_dim * (supernode_size - 2);
+        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
+        using V2d = Vec2_T<double>;
+        using  VMap = Eigen::Map<      V2d, Eigen::Aligned16>;
+        using CVMap = Eigen::Map<const V2d, Eigen::Aligned16>;
+
+        for (Int j = supernode_size - 2; j >= 0; j -= 2) {
+            V2d eta = VMap(b + j);
+
+            for (Int i = j + 2; i < supernode_size; i += 2) {
+                V2d b_strip = CVMap(b + i);
+                eta[0] -= CVMap(L_col_a + i).dot(b_strip);
+                eta[1] -= CVMap(L_col_b + i).dot(b_strip);
+            }
+
+            CVMap L_col_strip_a(L_col_a + j);
+            eta[1] /= L_col_b[j + 1];
+            eta[0] -= eta[1] * L_col_strip_a[1];
+            eta[0] /= L_col_strip_a[0];
+
+            VMap(b + j) = eta;
+
+            L_col_a -= L_leading_dim * 2;
+            L_col_b -= L_leading_dim * 2;
+        }
+    }
+};
+
+template<>
+struct SolveLowerTriAdjoint<double, 3> {
+    static void run(const Int supernode_size,
+             const double * __restrict__ L_data, const Int L_leading_dim,
+             double * __restrict__ b) {
+        const double *__restrict__ L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
+        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
+        const double *__restrict__ L_col_c = L_col_b + L_leading_dim;
+        using V3d = Vec3_T<double>;
+        using  VMap = Eigen::Map<      V3d>;
+        using CVMap = Eigen::Map<const V3d>;
+
+        for (Int j = supernode_size - 3; j >= 0; j -= 3) {
+            V3d eta = VMap(b + j);
+
+            for (Int i = j + 3; i < supernode_size; i += 3) {
+                V3d b_strip = CVMap(b + i);
+                eta[0] -= CVMap(L_col_a + i).dot(b_strip);
+                eta[1] -= CVMap(L_col_b + i).dot(b_strip);
+                eta[2] -= CVMap(L_col_c + i).dot(b_strip);
+            }
+
+            CVMap L_col_strip_a(L_col_a + j);
+            eta[2] /= L_col_c[j + 2];
+            eta[1] -= eta[2] * L_col_b[j + 2];
+            eta[1] /= L_col_b[j + 1];
+            eta[0] -= eta[1] * L_col_strip_a[1] + eta[2] * L_col_strip_a[2];
+            eta[0] /= L_col_strip_a[0];
+
+            VMap(b + j) = eta;
+
+            L_col_a -= L_leading_dim * 3;
+            L_col_b -= L_leading_dim * 3;
+            L_col_c -= L_leading_dim * 3;
+        }
+    }
+};
 
 }
 }

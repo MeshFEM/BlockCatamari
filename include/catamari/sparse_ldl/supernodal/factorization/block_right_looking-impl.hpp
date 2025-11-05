@@ -66,7 +66,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
     if (control_.supernodal_pivoting) {
         BlasMatrixView<Int> permutation = SupernodePermutation(supernode);
         num_supernode_pivots = PivotedFactorDiagonalBlock(
-                control_.block_size, control_.factorization_type, &diagonal_block,
+                control_.blas_block_size, control_.factorization_type, &diagonal_block,
                 &permutation);
         result->num_successful_pivots += num_supernode_pivots;
     } else {
@@ -75,17 +75,17 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
 #if REUSE_CHOLESKY_FLOWGRAPHS
             auto &fg = shared_state->cholesky_flowgraphs[supernode];
             if (!fg) {
-                fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
+                fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.blas_block_size, control_.factor_tile_size);
                 fg->failureCallback = [shared_state]() { shared_state->setFailed(); };
             }
             num_supernode_pivots = fg->run(diagonal_block);
 #else
-            CholeskyFlowgraph<Field> fg(*(shared_state->tbb_ctx), diagonal_block, control_.block_size, control_.factor_tile_size);
+            CholeskyFlowgraph<Field> fg(*(shared_state->tbb_ctx), diagonal_block, control_.blas_block_size, control_.factor_tile_size);
             fg.failureCallback = [shared_state]() { shared_state->setFailed(); };
             num_supernode_pivots = fg.run(diagonal_block);
 #endif
         } else {
-            num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
+            num_supernode_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.blas_block_size, &diagonal_block);
         }
 
         FG_STOP_TIMER(shared_state->finegrained_timers, supernode, FactorDiag);
@@ -881,7 +881,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
             const Int supernode_size = lower_block.width;
 
             BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block); // TODO: only the diagonal block?
-            Int num_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.block_size, &diagonal_block);
+            Int num_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.blas_block_size, &diagonal_block);
             if (num_pivots < supernode_size) {
                 shared_state.setFailed();
                 if (shared_state.tbb_ctx) shared_state.tbb_ctx->cancel_group_execution();

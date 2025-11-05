@@ -193,7 +193,7 @@ class SparseLDL {
   Int NumRows() const;
 
   // Solves a set of linear systems using the factorization.
-  void Solve(BlasMatrixView<Field>* right_hand_sides, bool already_permuted = false) const;
+  void Solve(BlasMatrixView<Field>* right_hand_sides, Int block_size, bool already_permuted = false) const;
 
   // Solves a set of linear systems using iterative refinement.
   RefinedSolveStatus<Real> RefinedSolve(

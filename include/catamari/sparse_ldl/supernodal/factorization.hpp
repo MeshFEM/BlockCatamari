@@ -115,21 +115,22 @@ struct Control {
   // The amount of dynamic regularization -- if any -- to use.
   DynamicRegularizationControl<Field> dynamic_regularization;
 
-  // The following thresholds are now ignored in favor of selecting the
-  // out-of-place code path based on the platform. This is because experiments
-  // have shown the out-of-place update to be always faster than using
-  // Accelerate BLAS on Apple Silicon and always slower than MKL on x86
+  // The minimal supernode size to switch to out-of-place trapezoidal solves.
+#if defined(__APPLE__)
+  Int forward_solve_out_of_place_supernode_threshold = 64;
+#else
+  Int forward_solve_out_of_place_supernode_threshold = 24;
+#endif
 
-  // The minimal supernode size for an out-of-place trapezoidal solve to be
-  // used.
-  Int forward_solve_out_of_place_supernode_threshold = 10;
+  // The minimal supernode size to switch to out-of-place trapezoidal solves.
+#if defined(__APPLE__)
+  Int backward_solve_out_of_place_supernode_threshold = 64;
+#else
+  Int backward_solve_out_of_place_supernode_threshold = 24;
+#endif
 
-  // The minimal supernode size for an out-of-place trapezoidal solve to be
-  // used.
-  Int backward_solve_out_of_place_supernode_threshold = 10;
-
-  // The algorithmic block size for the factorization.
-  Int block_size = 64;
+  // // The algorithmic block size for the factorization.
+  Int blas_block_size = 64;
 
   // The size of the matrix tiles for factorization OpenMP tasks.
   Int factor_tile_size = 128;
@@ -534,11 +535,13 @@ class Factorization {
   Int NumRows() const;
 
   // Solve a set of linear systems using the factorization.
-  void Solve(BlasMatrixView<Field>* right_hand_sides, bool already_permuted = false) const;
+  void Solve(BlasMatrixView<Field>* right_hand_sides, Int block_size, bool already_permuted = false) const;
 
   // Solves a set of linear systems using the lower-triangular factor.
+  template<Int BLOCK_SIZE>
   void LowerTriangularSolve(BlasMatrixView<Field>* right_hand_sides) const;
 
+  template<Int BLOCK_SIZE>
   void OpenMPLowerTriangularSolve(
       BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state) const;
@@ -550,9 +553,10 @@ class Factorization {
 
   // Solves a set of linear systems using the trasnpose (or adjoint) of the
   // lower-triangular factor.
-  void LowerTransposeTriangularSolve(
-      BlasMatrixView<Field>* right_hand_sides) const;
+  template<Int BLOCK_SIZE>
+  void LowerTransposeTriangularSolve(BlasMatrixView<Field>* right_hand_sides) const;
 
+  template<Int BLOCK_SIZE>
   void OpenMPLowerTransposeTriangularSolve(
       BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state) const;
@@ -963,16 +967,18 @@ private:
   void LowerTriangularSolveRecursion(Int supernode,
                                      BlasMatrixView<Field>* right_hand_sides,
                                      Buffer<Field>* workspace) const;
-  template<Int BLOCK_SIZE = 1>
+  template<Int BLOCK_SIZE>
   void OpenMPLowerTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state, int level) const;
 
   // Performs the trapezoidal solve associated with a particular supernode.
-  template<Int BLOCK_SIZE = 1>
+  template<Int BLOCK_SIZE>
   void LowerSupernodalTrapezoidalSolve(Int supernode,
                                        BlasMatrixView<Field>* right_hand_sides,
                                        Buffer<Field>* workspace) const;
+
+  template<Int BLOCK_SIZE>
   void OpenMPLowerSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       BlasMatrixView<Field> *supernode_schur_complement) const;
@@ -982,16 +988,19 @@ private:
   void LowerTransposeTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       Buffer<Field>* packed_input_buf) const;
+
+  template<Int BLOCK_SIZE>
   void OpenMPLowerTransposeTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state, int level, tbb::task_group &tg) const;
 
   // Performs the trapezoidal solve associated with a particular supernode.
+  template<Int BLOCK_SIZE>
   void LowerTransposeSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       Buffer<Field>* workspace) const;
 
-  template<Int BLOCK_SIZE = 1>
+  template<Int BLOCK_SIZE>
   void LowerTransposeSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       BlasMatrixView<Field> &work_right_hand_sides) const;

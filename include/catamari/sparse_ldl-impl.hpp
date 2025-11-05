@@ -318,7 +318,7 @@ SparseLDLResult<Field> SparseLDL<Field>::RefactorWithFixedSparsityPattern(
 }
 
 template <class Field>
-void SparseLDL<Field>::Solve(BlasMatrixView<Field>* right_hand_sides, bool already_permuted) const {
+void SparseLDL<Field>::Solve(BlasMatrixView<Field>* right_hand_sides, Int block_size, bool already_permuted) const {
   ScopedEnableFlushToZero scope_guard;
   if (have_equilibration_) {
     // Apply the inverse of the equilibration matrix.
@@ -329,7 +329,7 @@ void SparseLDL<Field>::Solve(BlasMatrixView<Field>* right_hand_sides, bool alrea
     }
   }
   if (is_supernodal) {
-    supernodal_factorization->Solve(right_hand_sides, already_permuted);
+    supernodal_factorization->Solve(right_hand_sides, block_size, already_permuted);
   } else {
     if (already_permuted) throw std::runtime_error("Unimplemented");
     scalar_factorization->Solve(right_hand_sides);

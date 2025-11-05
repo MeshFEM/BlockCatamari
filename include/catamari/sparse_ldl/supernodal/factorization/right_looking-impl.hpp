@@ -51,11 +51,11 @@ bool Factorization<Field>::RightLookingSupernodeFinalize(
   if (control_.supernodal_pivoting) {
     BlasMatrixView<Int> permutation = SupernodePermutation(supernode);
     num_supernode_pivots = PivotedFactorDiagonalBlock(
-        control_.block_size, control_.factorization_type, &diagonal_block,
+        control_.blas_block_size, control_.factorization_type, &diagonal_block,
         &permutation);
   } else {
     num_supernode_pivots = FactorDiagonalBlock(
-        control_.block_size, control_.factorization_type, dynamic_reg_params,
+        control_.blas_block_size, control_.factorization_type, dynamic_reg_params,
         &diagonal_block, &result->dynamic_regularization);
   }
   CATAMARI_STOP_TIMER(profile.cholesky);

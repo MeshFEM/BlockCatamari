@@ -31,7 +31,7 @@ namespace supernodal_ldl {
 
 template <class Field>
 void Factorization<Field>::Solve(
-    BlasMatrixView<Field>* right_hand_sides, bool already_permuted) const {
+    BlasMatrixView<Field>* right_hand_sides, Int block_size, bool already_permuted) const {
   const bool needs_permutation = !(ordering_.permutation.Empty() || already_permuted);
   // Reorder the input into the permutation of the factorization.
 
@@ -43,7 +43,7 @@ void Factorization<Field>::Solve(
     if (permute_scratch_.Size() < size)
         permute_scratch_.Resize(size);
     permuted_right_hand_sides.data = permute_scratch_.Data();
-    InversePermute(ordering_.inverse_permutation, *right_hand_sides, &permuted_right_hand_sides);
+    InversePermute(block_size, ordering_.inverse_permutation, *right_hand_sides, &permuted_right_hand_sides);
 #else
     Permute(ordering_.permutation, right_hand_sides);
 #endif
@@ -124,24 +124,48 @@ void Factorization<Field>::Solve(
     }
 
     {
-        OpenMPLowerTriangularSolve(&permuted_right_hand_sides, &shared_state);
-        OpenMPDiagonalSolve(&permuted_right_hand_sides);
-        OpenMPLowerTransposeTriangularSolve(&permuted_right_hand_sides, &shared_state);
+        if (block_size == 3) {
+            OpenMPLowerTriangularSolve<3>(&permuted_right_hand_sides, &shared_state);
+            OpenMPDiagonalSolve(&permuted_right_hand_sides);
+            OpenMPLowerTransposeTriangularSolve<3>(&permuted_right_hand_sides, &shared_state);
+        }
+        else if (block_size == 2) {
+            OpenMPLowerTriangularSolve<2>(&permuted_right_hand_sides, &shared_state);
+            OpenMPDiagonalSolve(&permuted_right_hand_sides);
+            OpenMPLowerTransposeTriangularSolve<2>(&permuted_right_hand_sides, &shared_state);
+        }
+        else {
+            OpenMPLowerTriangularSolve<1>(&permuted_right_hand_sides, &shared_state);
+            OpenMPDiagonalSolve(&permuted_right_hand_sides);
+            OpenMPLowerTransposeTriangularSolve<1>(&permuted_right_hand_sides, &shared_state);
+        }
     }
 
     SetNumBlasThreads(old_max_threads);
 
   } else {
-      LowerTriangularSolve(&permuted_right_hand_sides);
-      DiagonalSolve(&permuted_right_hand_sides);
-      LowerTransposeTriangularSolve(&permuted_right_hand_sides);
+      if (block_size == 3) {
+          LowerTriangularSolve<3>(&permuted_right_hand_sides);
+          DiagonalSolve(&permuted_right_hand_sides);
+          LowerTransposeTriangularSolve<3>(&permuted_right_hand_sides);
+      }
+      else if (block_size == 2) {
+          LowerTriangularSolve<2>(&permuted_right_hand_sides);
+          DiagonalSolve(&permuted_right_hand_sides);
+          LowerTransposeTriangularSolve<2>(&permuted_right_hand_sides);
+      }
+      else {
+          LowerTriangularSolve<1>(&permuted_right_hand_sides);
+          DiagonalSolve(&permuted_right_hand_sides);
+          LowerTransposeTriangularSolve<1>(&permuted_right_hand_sides);
+      }
   }
 
   // Reverse the factorization permutation.
   if (needs_permutation) {
     BENCHMARK_SCOPED_TIMER_SECTION timer("IPermute");
 #if SOLVE_PERMUTE_SCRATCH
-    InversePermute(ordering_.permutation, permuted_right_hand_sides, right_hand_sides);
+    InversePermute(block_size, ordering_.permutation, permuted_right_hand_sides, right_hand_sides);
 #else
     Permute(ordering_.inverse_permutation, right_hand_sides);
 #endif
@@ -177,17 +201,8 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
         LeftLowerTriangularSolves(diag_block, &right_hand_sides_supernode);
     else {
 #if 1
-        if (supernode_size < 8) {
-          Field * __restrict__ b = right_hand_sides_supernode.Data();
-          const Field *__restrict__ triang_column = diag_block.Data();
-          for (Int j = 0; j < supernode_size; ++j) {
-            b[j] /= triang_column[j];
-            const Field eta = b[j];
-            for (Int i = j + 1; i < supernode_size; ++i)
-              b[i] -= triang_column[i] * eta;
-            triang_column += diag_block.leading_dim;
-          }
-        }
+        if (supernode_size < 128)
+          trs_kernels::SolveLowerTri<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
         else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
 #else
         TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
@@ -212,13 +227,8 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   // using the original threshold rule:
   //        if (supernode_size >= control_.forward_solve_out_of_place_supernode_threshold) {
   const Int* indices = lower_factor_->StructureBeg(supernode);
-#if defined(__APPLE__)
-  // static constexpr bool out_of_place = false;
-  bool out_of_place = supernode_size >= 64;
-#else
-  // static constexpr bool out_of_place = true;
-  bool out_of_place = supernode_size >= control_.forward_solve_out_of_place_supernode_threshold;
-#endif
+  const bool out_of_place = supernode_size >= control_.forward_solve_out_of_place_supernode_threshold;
+
   if (out_of_place) {
     FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
     // Perform an out-of-place GEMM.
@@ -276,9 +286,10 @@ void Factorization<Field>::LowerTriangularSolveRecursion(
 }
 
 template <class Field>
+template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides) const {
-  BENCHMARK_SCOPED_TIMER_SECTION timer("LowerTriangularSolve");
+  BENCHMARK_SCOPED_TIMER_SECTION timer("LowerTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
 
   // Allocate the workspace.
   const Int workspace_size = max_degree_ * right_hand_sides->width;
@@ -295,7 +306,7 @@ void Factorization<Field>::LowerTriangularSolve(
   // Any postorder will do...
   const Int num_supernodes = ordering_.supernode_sizes.Size();
   for (Int s = 0; s < num_supernodes; ++s) {
-    LowerSupernodalTrapezoidalSolve(s, right_hand_sides, &workspace);
+    LowerSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &workspace);
   }
 #endif
 
@@ -333,6 +344,7 @@ void Factorization<Field>::DiagonalSolve(
 }
 
 template <class Field>
+template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     Buffer<Field>* packed_input_buf) const {
@@ -345,7 +357,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
   work_right_hand_sides.leading_dim = subdiagonal.height;
   work_right_hand_sides.data = packed_input_buf->Data();
 
-  LowerTransposeSupernodalTrapezoidalSolve(supernode, right_hand_sides, work_right_hand_sides);
+  LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(supernode, right_hand_sides, work_right_hand_sides);
 }
 
 template <class Field>
@@ -367,19 +379,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
       lower_factor_->blocks[supernode];
   if (subdiagonal.height) {
 
-    // Handle the external updates for this supernode.
-    // Note: it seems that the out-of-place update is always faster than
-    // using Accelerate BLAS on Apple Silicon and always slower than
-    // MKL on x86. So we select based on platform rather than
-    // using the original threshold rule:
-    //      if (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) {
-#if defined(__APPLE__)
-      // static constexpr bool out_of_place = false;
-      bool out_of_place = supernode_size >= 64;
-#else
-      // static constexpr bool out_of_place = true;
-      bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
-#endif
+    const bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
     if (out_of_place) {
       FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
       // Fill the work right_hand_sides.
@@ -423,18 +423,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     }
     else {
 #if 1
-        if (supernode_size < 8) {
-          Field * __restrict__ b = right_hand_sides_supernode.Data();
-          const Field * __restrict__ triang_column = diag_block.Pointer(0, supernode_size - 1);
-          for (Int j = supernode_size - 1; j >= 0; --j) {
-            Field eta = b[j];
-            for (Int i = j + 1; i < supernode_size; ++i)
-              eta -= Conjugate(triang_column[i]) * b[i];
-            eta /= Conjugate(triang_column[j]);
-            b[j] = eta;
-            triang_column -= diag_block.leading_dim;
-          }
-        }
+        if (supernode_size < 128)
+          trs_kernels::SolveLowerTriAdjoint<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
         else TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
 #else
         TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
@@ -475,9 +465,10 @@ void Factorization<Field>::LowerTransposeTriangularSolveRecursion(
 }
 
 template <class Field>
+template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTransposeTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides) const {
-  BENCHMARK_SCOPED_TIMER_SECTION timer("LowerTransposeTriangularSolve");
+  BENCHMARK_SCOPED_TIMER_SECTION timer("LowerTransposeTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
 
   // Allocate the workspace.
   const Int workspace_size = max_degree_ * right_hand_sides->width;
@@ -495,7 +486,7 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
   // Any pre-order will do
   const Int num_supernodes = ordering_.supernode_sizes.Size();
   for (Int s = num_supernodes - 1; s >= 0; --s)
-      LowerTransposeSupernodalTrapezoidalSolve(s, right_hand_sides, &packed_input_buf);
+      LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &packed_input_buf);
 #endif
 }
 
