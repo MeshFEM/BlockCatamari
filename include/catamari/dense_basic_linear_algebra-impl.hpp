@@ -14,6 +14,7 @@
 
 #include "catamari/dense_basic_linear_algebra.hpp"
 #include "../../../../../src/lib/MeshFEM/Parallelism.hh"
+#include <Eigen/Dense>
 
 namespace catamari {
 
@@ -3394,25 +3395,33 @@ void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatr
     if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
     for (Int j = 0; j < out->width; ++j) {
         // Apply the permutation.
-        const Field *in_ptr = in.Pointer(0, j);
-        Field *out_ptr = out->Pointer(0, j);
+        const Field * __restrict__ in_ptr = in.Pointer(0, j);
+        Field * __restrict__ out_ptr = out->Pointer(0, j);
         if (out->height % BLOCK_SIZE != 0) { throw std::runtime_error("InversePermute: height must be a multiple of BLOCK_SIZE"); }
 
         Int blockHeight = out->height / BLOCK_SIZE;
 
         auto permute_range = [out_ptr, in_ptr, &iperm](const tbb::blocked_range<Int> &r) {
             const Int end = r.end() * BLOCK_SIZE;
-            Field *dst = out_ptr + r.begin() * BLOCK_SIZE;
+            Field * __restrict__ dst = out_ptr + r.begin() * BLOCK_SIZE;
             for (Int i = BLOCK_SIZE * r.begin(); i < end; i += BLOCK_SIZE) {
-                const Field *src = in_ptr + iperm[i];
-                for (Int c = 0; c < BLOCK_SIZE; ++c)
-                    *(dst++) = *(src++);
+                using Vec = Eigen::Matrix<Field, BLOCK_SIZE, 1>;
+                Eigen::Map<Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>{dst}
+                        = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>{in_ptr + iperm[i]};
+                dst += BLOCK_SIZE;
            }
         };
 
 #if 1
-        if (blockHeight > 4096) {
-            tbb::parallel_for(tbb::blocked_range<Int>(0, blockHeight, 2048), permute_range);
+        static constexpr int parallelism_chunk_size = 4096;
+        int num_procs = blockHeight / parallelism_chunk_size;
+        if (num_procs > 1) {
+            // std::cout << "Inverse permute num procs: " << num_procs << std::endl;
+            // tbb::global_control gc(tbb::global_control::max_allowed_parallelism, num_procs);
+            // static tbb::task_arena arena(num_procs);
+            // arena.execute([&] {
+                tbb::parallel_for(tbb::blocked_range<Int>(0, blockHeight, parallelism_chunk_size), permute_range); // , tbb::simple_partitioner{});
+            // });
         } else
 #endif
 		permute_range(tbb::blocked_range<Int>(0, blockHeight));

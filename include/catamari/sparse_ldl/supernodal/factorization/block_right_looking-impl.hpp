@@ -40,6 +40,8 @@
 // likely due to memory access patterns.
 #define PROCESS_LEAVES_FIRST 0 // Disabled for now due to posdef slowdown...
 
+#define USE_SERIAL_SUBTREE_STORAGE_STACK 1
+
 namespace catamari {
 namespace supernodal_ldl {
 
@@ -272,7 +274,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
     auto merge_into_diagonal_block = [&]() {
         // Parallelize for very large supernodes (especially roots with no/limited parallelism)
 #if PARALLELIZE_MERGE_INTO_SUPERNODE
-        if (supernode_size > 512) {
+        if ((supernode_size > 512) && (shared_state->tbb_ctx)) {
             // Inserting this timer is, in a sense, double-counting because `BlockMergeChildSchurComplements` is called from within the `MergeSchurInPara` timer. We'd need more timers to disentangle this time properly and still time the merges in a threadsafe way.
             // The extra timers could be done using local stack variables that get accumulated to the supernode's timers, but we need to define some more macros for this.
             // FG_START_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
@@ -366,7 +368,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
         }
     };
 
-    if (supernode_size > 128 && schur_complement.width > 128) {
+    if ((supernode_size > 128) && (schur_complement.width > 128) && shared_state->tbb_ctx) {
         tbb::task_group tg(*(shared_state->tbb_ctx));
         tg.run(merge_into_diagonal_block);
         tg.run(merge_into_schur_complement);
@@ -456,6 +458,7 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             sc = subtreeStorage->push(degree);
     };
 
+#if USE_SERIAL_SUBTREE_STORAGE_STACK
     if (!parallel) {
         // Output destination buffers
         BlasMatrixView<Field> lower_block    = lower_factor_->blocks[supernode];
@@ -507,6 +510,46 @@ bool Factorization<Field>::BlockRightLookingSubtree(
             else shared_state->schur_complement_storage[child].deallocate();
         }
     }
+#else // !USE_SERIAL_SUBTREE_STORAGE_STACK
+    if (!parallel) {
+        for (Int child_index = 0; child_index < num_children; ++child_index) {
+            const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
+
+            SparseLDLResult<Field> resultContrib;
+
+            // FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+            process_child(child, &resultContrib, subtreeStorage);
+            // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
+
+            MergeContribution(resultContrib, result);
+            if (dynamic_reg_params.enabled) assert(false); /* MergeDynamicRegularizations(result_contributions, result); */
+
+            // Stop immediately if this child failed to finalize (or if another thread encountered a failure)
+            if (shared_state->hasFailed()) return false;
+        }
+
+        if (!shared_state->hasFailed()) {
+            // FG_START_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+            allocate_schur_complement();
+            // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Allocation);
+
+            FG_START_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
+            BlockMergeChildSchurComplements<BlockSize>(supernode, *this, shared_state);
+            FG_STOP_TIMER(shared_state->finegrained_timers, supernode, MergeSchurInPara);
+        }
+
+        FG_START_TIMER(shared_state->finegrained_timers, supernode, Deallocation);
+        // Clear out all storage used by descendants' fronts.
+        for (Int child_index = 0; child_index < num_children; ++child_index) {
+            const Int child = ordering_.assembly_forest.children[child_beg + child_index];
+            auto &sc = shared_state->schur_complements[child];
+            sc.width = sc.height = 0;
+            sc.data = nullptr;
+            shared_state->schur_complement_storage[child].deallocate();
+        }
+        FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Deallocation);
+    }
+#endif // USE_SERIAL_SUBTREE_STORAGE_STACK
     else {
         // FG_START_TIMER(shared_state->finegrained_timers, supernode, Recurse);
         Buffer<SparseLDLResult<Field>> result_contributions(num_children);

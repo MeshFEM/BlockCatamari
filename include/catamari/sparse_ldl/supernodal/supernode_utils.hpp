@@ -193,7 +193,7 @@ struct FineGrainedTimersSolve {
   quotient::Timer& operator()(Int supernode, Type type) { return (*this)[type][supernode]; }
 };
 
-template <typename Field, class FineGrainedTimers = FineGrainedTimersFactorize>
+template <typename Field, bool ForSolve = false>
 struct RightLookingSharedState {
   RightLookingSharedState() { unsetFailed(); }
   // The Schur complement matrices for each of the supernodes in the
@@ -216,7 +216,7 @@ struct RightLookingSharedState {
   //  we use the `schur_complement_storage` stack below instead!)
   Buffer<Buffer<Field>> schur_complement_buffers;
 
-  Buffer<SchurComplementStorage<Field>> schur_complement_storage;
+  Buffer<SchurComplementStorage<Field, /* VectorOnly = */ ForSolve>> schur_complement_storage;
 
   void unsetFailed() { m_fail.store(false, std::memory_order_relaxed); }
   void   setFailed() { m_fail.store(true, std::memory_order_relaxed); }
@@ -230,6 +230,7 @@ struct RightLookingSharedState {
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
 #if CATAMARI_FINEGRAINED_TIMERS
+  using FineGrainedTimers = std::conditional_t<ForSolve, FineGrainedTimersSolve, FineGrainedTimersFactorize>;
   FineGrainedTimers finegrained_timers;
 #endif  // CATAMARI_FINEGRAINED_TIMERS
 

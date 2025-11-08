@@ -309,7 +309,7 @@ class Factorization {
   FactorizationProfile profile;
 #endif
 
-  using SolveSharedState = RightLookingSharedState<Field, FineGrainedTimersSolve>;
+  using SolveSharedState = RightLookingSharedState<Field, /* ForSolve = */ true>;
 
   // Factors the given matrix using the prescribed permutation.
   SparseLDLResult<Field> Factor(const CoordinateMatrix<Field>& matrix,
@@ -993,6 +993,7 @@ private:
   void OpenMPLowerTransposeTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state, int level, tbb::task_group &tg) const;
+  mutable std::vector<Buffer<Field>> thread_local_solve_data;
 
   // Performs the trapezoidal solve associated with a particular supernode.
   template<Int BLOCK_SIZE>

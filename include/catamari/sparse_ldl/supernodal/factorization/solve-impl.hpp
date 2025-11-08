@@ -26,6 +26,8 @@
 // (at the cost of `right_hand_sides` worth of memory).
 #define SOLVE_PERMUTE_SCRATCH 1
 
+#define SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE 1
+
 namespace catamari {
 namespace supernodal_ldl {
 
@@ -69,6 +71,13 @@ void Factorization<Field>::Solve(
     // by the data for the second column (if any), and so on.
 
     {
+#if SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
+
+        if (shared_state.schur_complements.Size() != num_supernodes) {
+            shared_state.schur_complements.Resize(num_supernodes);
+            shared_state.schur_complement_storage.Resize(num_supernodes);
+        }
+#else !SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
         // BENCHMARK_SCOPED_TIMER_SECTION timer("Allocate");
         const Int num_rhs = right_hand_sides->width;
 
@@ -103,9 +112,10 @@ void Factorization<Field>::Solve(
         bool num_rhs_changed = shared_state.schur_complements[0].width != num_rhs;
 
         if (realloc) {
-            // std::cout << "Allocated solve workspace buffer of size "
-            //           << total_size * sizeof(Field) / (1024. * 1024)
-            //           << "MB" << std::endl;
+            std::cout << "Allocated solve workspace buffer of size "
+                      << total_size * sizeof(Field) / (1024. * 1024)
+                      << "MB" << std::endl;
+            std::cout << "This is " << total_size << " entries vs rhs size of " << right_hand_sides->width * right_hand_sides->height << std::endl;
 
             Int offset = 0;
             for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
@@ -121,6 +131,33 @@ void Factorization<Field>::Solve(
             for (Int supernode = 0; supernode < num_supernodes; ++supernode)
                 shared_state.schur_complements[supernode].width = num_rhs;
         }
+#endif // SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
+    }
+
+    // Compute flop-count estimates (which usually was already filled by the factorization).
+    // TODO: compute actual solve work estimates instead of reusing
+    // factorization estimates? However, they should be simliar enough
+    // (denoting a subtree's factorization flop count as f, the
+    // corresponding solve flop count should be BigTheta(f^{2/3})).
+    Buffer<double> &work_estimates = const_cast<Buffer<double> &>(work_estimates_);
+    double &total_work = const_cast<double &>(total_work_);
+    if (work_estimates.Size() != num_supernodes) {
+        work_estimates.Resize(num_supernodes);
+        // Any postorder will do...
+        const auto &af = ordering_.assembly_forest;
+        for (Int i = 0; i < num_supernodes; ++i) {
+            const Int child_beg = af.child_offsets[i];
+            const Int child_end = af.child_offsets[i + 1];
+
+            double subtree_work = 0;
+            for (Int child_index = child_beg; child_index < child_end; ++child_index)
+                subtree_work += work_estimates[af.children[child_index]];
+            work_estimates[i] = subtree_work + IntraNodeWorkEstimate(i, *lower_factor_);
+        }
+
+        total_work = 0;
+        for (const Int& root : ordering_.assembly_forest.roots)
+            total_work += work_estimates[root];
     }
 
     {
@@ -483,10 +520,32 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
                                            &packed_input_buf);
   }
 #else
-  // Any pre-order will do
-  const Int num_supernodes = ordering_.supernode_sizes.Size();
-  for (Int s = num_supernodes - 1; s >= 0; --s)
-      LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &packed_input_buf);
+  // // Any pre-order will do
+  // const Int num_supernodes = ordering_.supernode_sizes.Size();
+  // for (Int s = num_supernodes - 1; s >= 0; --s)
+  //     LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &packed_input_buf);
+
+  std::stack<std::pair<Int, Int>> stack;
+  const Int num_roots = ordering_.assembly_forest.roots.Size();
+  for (Int root_index = 0; root_index < num_roots; ++root_index) {
+    Int s = ordering_.assembly_forest.roots[root_index];
+    LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &packed_input_buf);
+    stack.push({s, ordering_.assembly_forest.child_offsets[s]});
+  }
+
+  while (!stack.empty()) {
+      auto &t = stack.top();
+      Int s = t.first;
+      Int &ci = t.second;
+
+      if (ci < ordering_.assembly_forest.child_offsets[s + 1]) {
+          const Int child = ordering_.assembly_forest.children[ci];
+          LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(child, right_hand_sides, &packed_input_buf);
+          stack.push({child, ordering_.assembly_forest.child_offsets[child]}); // descend
+          ++ci;
+      }
+      else stack.pop();
+  };
 #endif
 }
 
