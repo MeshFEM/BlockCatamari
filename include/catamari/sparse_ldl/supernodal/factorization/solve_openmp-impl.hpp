@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <catamari/dense_basic_linear_algebra-impl.hpp>
 #include <queue>
+#include <bitset>
 #include <stdexcept>
 
 #include <tbb/task_group.h>
@@ -28,11 +29,13 @@
 // for storing the "schur complement" updates in LowerTransposeSupernodalTrapezoidalSolve
 // or to use the per-supernode storage buffers; theoretically this can help cache
 // locality/avoid false sharing--at the cost of additional memory allocation.
-#define USE_TLS_SCHUR_RHS 1
+#define USE_TLS_SCHUR_RHS 0
 
 #if SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE && !USE_TLS_SCHUR_RHS
 #error "USE_TLS_SCHUR_RHS must be set when SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE is enabled to avoid memory bugs!"
 #endif
+
+#define USE_ORIGINAL_LOWER_TRI_MERGE_SOLVE 1
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -261,11 +264,13 @@ void Factorization<Field>::OpenMPLowerTriangularSolve(
     SolveSharedState* shared_state) const {
   BENCHMARK_SCOPED_TIMER_SECTION timer("ParallelLowerTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
 
+  const Int num_roots = ordering_.assembly_forest.roots.Size();
+
+#if USE_ORIGINAL_LOWER_TRI_MERGE_SOLVE
   // Construct the map from child structures to parent fronts (in case it wasn't populated during the factorization (e.g., for left-looking))
   constructChildToParentMap(ordering_, lower_factor_.get());
 
   // Recurse on each tree in the elimination forest.
-  const Int num_roots = ordering_.assembly_forest.roots.Size();
   tbb::task_group tg;
   for (Int root_index = 0; root_index < num_roots; ++root_index) {
       tg.run([right_hand_sides, shared_state, root_index, &tg, this]() {
@@ -277,6 +282,22 @@ void Factorization<Field>::OpenMPLowerTriangularSolve(
       });
   }
   tg.wait();
+#else // !USE_ORIGINAL_LOWER_TRI_MERGE_SOLVE
+  if (right_hand_sides->width > 1) throw std::runtime_error("ParallelLowerTriangularSolveThreadLocalRHSRecursion does not yet support multiple RHS");
+
+  const Int nt = tbb::this_task_arena::max_concurrency();
+  thread_local_solve_data.clear();
+  thread_local_solve_data.resize(nt);
+
+  // Allocate the workspaces
+  Buffer<Buffer<Field>> thread_workspaces(nt);
+
+  for (Int root_index = 0; root_index < num_roots; ++root_index) {
+    const Int root = ordering_.assembly_forest.roots[root_index];
+    std::bitset<MAX_THREADS> contributingSubtreeThreads;
+	ParallelLowerTriangularSolveThreadLocalRHSRecursion<BLOCK_SIZE>(root, right_hand_sides, &thread_workspaces, contributingSubtreeThreads, /* level = */ 0);
+  }
+#endif // USE_STACK_DFS_INSTEAD_OF_SERIAL_RECURSION
 }
 
 template <class Field>
@@ -403,6 +424,101 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolve(
         });
     }
     tg.wait();
+}
+
+template <class Field>
+template<Int BLOCK_SIZE>
+void Factorization<Field>::ParallelLowerTriangularSolveThreadLocalRHSRecursion(
+	Int supernode, BlasMatrixView<Field>* right_hand_sides, Buffer<Buffer<Field>> *thread_workspaces,
+    std::bitset<MAX_THREADS> &contributingSubtreeThreads, int level) const {
+  // Set up/access thread-local RHS and workspace vectors.
+  const Int nt = thread_workspaces->Size();
+  Int thread = tbb::this_task_arena::current_thread_index();
+  Buffer<Field> &rhs_copy = thread_local_solve_data[thread];
+  if (rhs_copy.Size() == 0) rhs_copy.Resize(right_hand_sides->height, Field{0});
+  Buffer<Field> &workspace = (*thread_workspaces)[thread];
+  if (workspace.Size() == 0) workspace.Resize(max_degree_);
+
+  BlasMatrixView<Field> rhs_copy_bmv;
+  rhs_copy_bmv.height = right_hand_sides->height;
+  rhs_copy_bmv.width = 1;
+  rhs_copy_bmv.leading_dim = right_hand_sides->height;
+  rhs_copy_bmv.data = rhs_copy.Data();
+
+  auto solve_supernode = [this, &rhs_copy_bmv, right_hand_sides, &workspace, nt, thread, &contributingSubtreeThreads](Int s, bool serial) {
+    const Int supernode_offset = ordering_.supernode_offsets[s];
+    const Int supernode_size   = ordering_.supernode_sizes[s];
+
+    Eigen::Map<VecX_T<Field>>(rhs_copy_bmv.data + supernode_offset, supernode_size) +=
+      Eigen::Map<const VecX_T<Field>>(right_hand_sides->data + supernode_offset, supernode_size);
+
+    if (!serial) {
+      // Merge in contributions from the other threads.
+      for (Int other_thread = 0; other_thread < nt; ++other_thread) {
+        if ((thread == other_thread) || !contributingSubtreeThreads.test(other_thread)) continue;
+        Eigen::Map<VecX_T<Field>>(rhs_copy_bmv.data + supernode_offset, supernode_size) +=
+          Eigen::Map<const VecX_T<Field>>(thread_local_solve_data[other_thread].Data() + supernode_offset, supernode_size);
+      }
+    }
+
+    LowerSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, &rhs_copy_bmv, &workspace);
+
+    // Finalize supernode's result.
+    Eigen::Map<VecX_T<Field>>(right_hand_sides->data + supernode_offset, supernode_size) =
+      Eigen::Map<const VecX_T<Field>>(rhs_copy_bmv.data + supernode_offset, supernode_size);
+  };
+
+  contributingSubtreeThreads.set(thread);
+
+  const auto &af = ordering_.assembly_forest;
+  const Int child_beg = af.child_offsets[supernode];
+  const Int child_end = af.child_offsets[supernode + 1];
+  const Int num_children = child_end - child_beg;
+  const bool serial = level > 6;
+  if (!serial && (num_children > 1)) {
+    Buffer<std::bitset<MAX_THREADS>> childContributingSubtreeThreads(num_children);
+    tbb::task_group tg;
+    for (Int child_index = 0; child_index < num_children; ++child_index) {
+        const Int child = af.children[child_beg + child_index];
+        std::bitset<MAX_THREADS> &childContributingSubtreeThread = childContributingSubtreeThreads[child_index];
+        tg.run([this, child, right_hand_sides, thread_workspaces, &childContributingSubtreeThread, level]() {
+          ParallelLowerTriangularSolveThreadLocalRHSRecursion<BLOCK_SIZE>(child, right_hand_sides, thread_workspaces, childContributingSubtreeThread, level + 1);
+        });
+    }
+    tg.wait();
+
+    for (Int child_index = 0; child_index < num_children; ++child_index)
+      contributingSubtreeThreads |= childContributingSubtreeThreads[child_index];
+  }
+  else if (!serial && (num_children > 0)) {
+      const Int child = af.children[child_beg];
+      ParallelLowerTriangularSolveThreadLocalRHSRecursion<BLOCK_SIZE>(child, right_hand_sides, thread_workspaces, contributingSubtreeThreads, level + 1);
+  }
+  else {
+    std::stack<std::pair<Int, Int>> stack;
+    stack.push({supernode, child_beg});
+    while (!stack.empty()) {
+      auto &t = stack.top();
+      Int s = t.first;
+      Int &ci = t.second;
+
+      const Int cb = af.child_offsets[s];
+      const Int ce = af.child_offsets[s + 1];
+
+      if (ci < ce) {
+        const Int child = af.children[ci];
+        stack.push({child, af.child_offsets[child]}); // descend to process next child
+        ++ci;
+      }
+      else { // last child was processed
+        solve_supernode(s, serial);
+        stack.pop();
+      }
+    };
+    return; // subtree root has been processed!
+  }
+
+  solve_supernode(supernode, serial);
 }
 
 }  // namespace supernodal_ldl

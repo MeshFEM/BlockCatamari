@@ -16,6 +16,8 @@
 #include "catamari/sparse_ldl/supernodal/factorization/SchurComplementStorage.hpp"
 #include <tbb/task_group.h>
 #include <catamari/sparse_ldl/supernodal/supernode_utils-impl.hpp>
+
+#include <bitset>
 #include <stdexcept>
 
 #ifdef CATAMARI_ENABLE_TIMERS
@@ -964,6 +966,7 @@ private:
 
   // Performs the portion of the lower-triangular solve corresponding to the
   // subtree with the given root supernode.
+  template<Int BLOCK_SIZE>
   void LowerTriangularSolveRecursion(Int supernode,
                                      BlasMatrixView<Field>* right_hand_sides,
                                      Buffer<Field>* workspace) const;
@@ -971,6 +974,16 @@ private:
   void OpenMPLowerTriangularSolveRecursion(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       SolveSharedState* shared_state, int level) const;
+
+#define MAX_THREADS 32
+  // An alternative strategy for parallelizing the forward substition:
+  // have each thread maintain its own copy of the RHS vector to collect
+  // contributions from earlier columns.
+  template<Int BLOCK_SIZE>
+  void ParallelLowerTriangularSolveThreadLocalRHSRecursion(
+		Int supernode, BlasMatrixView<Field>* right_hand_sides,
+		Buffer<Buffer<Field>> *thread_workspaces,
+        std::bitset<MAX_THREADS> &contributingThreads, int level) const;
 
   // Performs the trapezoidal solve associated with a particular supernode.
   template<Int BLOCK_SIZE>

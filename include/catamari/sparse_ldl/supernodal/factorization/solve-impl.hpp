@@ -26,7 +26,7 @@
 // (at the cost of `right_hand_sides` worth of memory).
 #define SOLVE_PERMUTE_SCRATCH 1
 
-#define SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE 1
+#define SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE 0
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -112,10 +112,10 @@ void Factorization<Field>::Solve(
         bool num_rhs_changed = shared_state.schur_complements[0].width != num_rhs;
 
         if (realloc) {
-            std::cout << "Allocated solve workspace buffer of size "
-                      << total_size * sizeof(Field) / (1024. * 1024)
-                      << "MB" << std::endl;
-            std::cout << "This is " << total_size << " entries vs rhs size of " << right_hand_sides->width * right_hand_sides->height << std::endl;
+            // std::cout << "Allocated solve workspace buffer of size "
+            //           << total_size * sizeof(Field) / (1024. * 1024)
+            //           << "MB" << std::endl;
+            // std::cout << "This is " << total_size << " entries vs rhs size of " << right_hand_sides->width * right_hand_sides->height << std::endl;
 
             Int offset = 0;
             for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
@@ -305,6 +305,7 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
 }
 
 template <class Field>
+template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTriangularSolveRecursion(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     Buffer<Field>* workspace) const {
@@ -315,7 +316,7 @@ void Factorization<Field>::LowerTriangularSolveRecursion(
   for (Int child_index = 0; child_index < num_children; ++child_index) {
     const Int child =
         ordering_.assembly_forest.children[child_beg + child_index];
-    LowerTriangularSolveRecursion(child, right_hand_sides, workspace);
+    LowerTriangularSolveRecursion<BLOCK_SIZE>(child, right_hand_sides, workspace);
   }
 
   // Perform this supernode's trapezoidal solve.
@@ -337,7 +338,7 @@ void Factorization<Field>::LowerTriangularSolve(
   const Int num_roots = ordering_.assembly_forest.roots.Size();
   for (Int root_index = 0; root_index < num_roots; ++root_index) {
     const Int root = ordering_.assembly_forest.roots[root_index];
-    LowerTriangularSolveRecursion(root, right_hand_sides, &workspace);
+    LowerTriangularSolveRecursion<BLOCK_SIZE>(root, right_hand_sides, &workspace);
   }
 #else
   // Any postorder will do...
@@ -520,11 +521,13 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
                                            &packed_input_buf);
   }
 #else
-  // // Any pre-order will do
-  // const Int num_supernodes = ordering_.supernode_sizes.Size();
-  // for (Int s = num_supernodes - 1; s >= 0; --s)
-  //     LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &packed_input_buf);
 
+#if 1
+  // Any pre-order will do
+  const Int num_supernodes = ordering_.supernode_sizes.Size();
+  for (Int s = num_supernodes - 1; s >= 0; --s)
+      LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &packed_input_buf);
+#else
   std::stack<std::pair<Int, Int>> stack;
   const Int num_roots = ordering_.assembly_forest.roots.Size();
   for (Int root_index = 0; root_index < num_roots; ++root_index) {
@@ -546,6 +549,7 @@ void Factorization<Field>::LowerTransposeTriangularSolve(
       }
       else stack.pop();
   };
+#endif
 #endif
 }
 
