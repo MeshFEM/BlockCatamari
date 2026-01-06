@@ -96,7 +96,7 @@ struct MultiplyLowerBlockAdjointEigenUnchunked {
     }
 };
 
-#if 1
+#if !defined(__APPLE__)
 template<>
 struct MultiplyLowerBlockAdjointEigenUnchunked<2> {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
@@ -134,7 +134,7 @@ struct MultiplyLowerBlockAdjointEigenUnchunked<2> {
 };
 #endif
 
-#if 1
+#if !defined(__APPLE__)
 template<>
 struct MultiplyLowerBlockAdjointEigenUnchunked<3> {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
@@ -201,7 +201,7 @@ struct MultiplyLowerBlockAdjointEigenUnchunked<3> {
 };
 #endif
 
-#if 1
+#if !defined(__APPLE__)
 template<>
 struct MultiplyLowerBlockAdjointEigenChunkedAlternate<2> {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
@@ -574,9 +574,9 @@ struct MultiplyLowerBlock { // `catamari_legacy` implementation
     }
 };
 
-#if 1
+#if !defined(__APPLE__)
 template<>
-struct MultiplyLowerBlock<double, 2> { // Optimized kernel for double
+struct MultiplyLowerBlock<double, 2> { // Optimized x86 kernel for double
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
              const double * __restrict__ A_data, const Int A_leading_dim,
              const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
