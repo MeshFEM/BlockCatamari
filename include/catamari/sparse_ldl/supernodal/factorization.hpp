@@ -128,7 +128,7 @@ struct Control {
 #if defined(__APPLE__)
   Int backward_solve_out_of_place_supernode_threshold = 64;
 #else
-  Int backward_solve_out_of_place_supernode_threshold = 24;
+  Int backward_solve_out_of_place_supernode_threshold = 18;
 #endif
 
   // // The algorithmic block size for the factorization.

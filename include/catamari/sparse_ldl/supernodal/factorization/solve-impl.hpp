@@ -28,6 +28,15 @@
 
 #define SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE 0
 
+// // Whether to use the "Schur complement" buffers as the "work_right_hand_sides"
+// // storage for out-of-place upper triangular solves.
+// // The motivation is that accessing entries from the parent's buffer will be
+// // less scattered/cache friendlier than going back to the full RHS vector;
+// // see [Duff, Erisman, and Reid: Direct Methods for Sparse Matrices, Section 14.3].
+// // This requires using num_child_diag_indices/child_rel_indices in addition to `child_indices`.
+// // TODO: experiment with implementing this variant!
+// #define USE_SCHUR_COMPLEMENT_STORAGE_FOR_OOP_LOWER_TRANSPOSE_SOLVE 1
+
 namespace catamari {
 namespace supernodal_ldl {
 
@@ -290,7 +299,9 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
       const Field *wrhs_ptr = work_right_hand_sides.Pointer(0, j);
       for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
         using Vec = VecN_T<Field, BLOCK_SIZE>; // TODO: evaluate add_strip version with restrict pointer, not using Eigen.
-        Eigen::Map<Vec>(rhs_ptr + indices[i]) -= Eigen::Map<const Vec>(wrhs_ptr + i);
+        using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        VMap(rhs_ptr + indices[i]) -= CVMap(wrhs_ptr + i);
       }
     }
     FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
@@ -415,19 +426,24 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
 
   const ConstBlasMatrixView<Field> & subdiagonal =
       lower_factor_->blocks[supernode];
-  if (subdiagonal.height) {
-
-    const bool out_of_place = supernode_size >= control_.backward_solve_out_of_place_supernode_threshold;
+  const Int degree = subdiagonal.height;
+  if (degree) {
+    const bool out_of_place = (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) || (degree >= 100);
     if (out_of_place) {
       FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
       // Fill the work right_hand_sides.
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
               Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
-        for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
-          const Field *src = rhs_ptr + indices[i];
-          for (Int c = 0; c < BLOCK_SIZE; ++c)
-            *(wrhs_ptr++) = *(src++);
+        using   Vec = VecN_T<Field, BLOCK_SIZE>; // TODO: evaluate add_strip version with restrict pointer, not using Eigen.
+        using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        for (Int i = 0; i < degree; i += BLOCK_SIZE) {
+            // (VMap(wrhs_ptr)) = CVMap(rhs_ptr + indices[i]);
+            // wrhs_ptr += BLOCK_SIZE;
+            const Field *src = rhs_ptr + indices[i];
+            for (Int c = 0; c < BLOCK_SIZE; ++c)
+              *(wrhs_ptr++) = *(src++);
         }
       }
 

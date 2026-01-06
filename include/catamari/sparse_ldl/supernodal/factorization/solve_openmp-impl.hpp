@@ -176,7 +176,7 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     child_right_hand_sides.data = nullptr;
 #endif
 
-    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, MergeChildContributions);
+    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, parent, MergeChildContributions);
   };
 
   // Recurse on this supernode's children.
@@ -361,7 +361,8 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolveRecursion(
         return;
     }
 #if 1
-  const bool serialSubtree = (work_estimates_[supernode] < 1e5); // Avoid excessive task scheduling overhead/use larger serial subtrees
+  // const bool serialSubtree = (work_estimates_[supernode] < 1e5); // Avoid excessive task scheduling overhead/use larger serial subtrees
+  const bool serialSubtree = (work_estimates_[supernode] < 2e6) || (level > 8); // Avoid excessive task scheduling overhead/use larger serial subtrees
 #else
     const bool serialSubtree = level > 8; // Avoid excessive task scheduling overhead
 #endif
