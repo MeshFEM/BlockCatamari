@@ -21,6 +21,7 @@ if (CATAMARI_WITH_OPENMP)
 endif()
 
 option(CATAMARI_INT64 "Use 64 bit integers" OFF)
+option(CATAMARI_VECTORIZE "Use march=native and enable intrinsics-based kernels" ON)
 
 ################################################################################
 # Bring in `mimalloc` to accelerate Schur complement memory allocation.
@@ -62,6 +63,10 @@ if (NOT TARGET catamari)
 
     if (CATAMARI_INT64)
         target_compile_definitions(catamari INTERFACE -DQUOTIENT_USE_64BIT)
+    endif()
+
+    if (CATAMARI_VECTORIZE)
+        target_compile_options(catamari INTERFACE -march=native) # TODO: also set macro to configure intrinsics kernel guard
     endif()
 
     target_link_libraries(catamari INTERFACE BLAS::BLAS mimalloc)
