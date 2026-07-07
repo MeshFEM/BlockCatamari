@@ -12,7 +12,7 @@
 
 #include "catamari/dense_basic_linear_algebra.hpp"
 #include "catamari/dense_factorizations.hpp"
-#include "../../../../../../../src/lib/MeshFEM/GlobalBenchmark.hh"
+#include <MeshFEMCore/GlobalBenchmark.hh>
 
 #include "catamari/sparse_ldl/supernodal/factorization.hpp"
 

@@ -22,7 +22,7 @@
 #include "catamari/matrix_market.hpp"
 
 #include "catamari/coordinate_matrix.hpp"
-#include "../../../../../src/lib/MeshFEM/GlobalBenchmark.hh"
+#include <MeshFEMCore/GlobalBenchmark.hh>
 
 namespace catamari {
 

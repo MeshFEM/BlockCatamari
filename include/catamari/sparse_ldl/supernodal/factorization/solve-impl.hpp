@@ -11,14 +11,14 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include <MeshFEM/GlobalBenchmark.hh>
-#include <MeshFEM/Types.hh>
+#include <MeshFEMCore/GlobalBenchmark.hh>
+#include <MeshFEMCore/Types.hh>
 #include <catamari/dense_basic_linear_algebra-impl.hpp>
 #include "catamari/dense_basic_linear_algebra.hpp"
 #include "catamari/dense_factorizations.hpp"
 
 #include "catamari/sparse_ldl/supernodal/factorization.hpp"
-#include <MeshFEM/Parallelism.hh>
+#include <MeshFEMCore/Parallelism.hh>
 
 #include "trs_kernels.hpp"
 

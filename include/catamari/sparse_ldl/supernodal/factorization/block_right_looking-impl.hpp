@@ -20,8 +20,8 @@
 
 #include "catamari/sparse_ldl/supernodal/factorization.hpp"
 
-#include "../../../../../../../src/lib/MeshFEM/GlobalBenchmark.hh"
-#include "../../../../../../../src/lib/MeshFEM/ParallelVectorOps.hh"
+#include <MeshFEMCore/GlobalBenchmark.hh>
+#include <MeshFEMCore/ParallelVectorOps.hh>
 #include "SchurComplementStorage.hpp"
 #include <cassert>
 #include "../catamari_config.hh"

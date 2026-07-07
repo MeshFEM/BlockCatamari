@@ -13,7 +13,7 @@
 #include "catamari/macros.hpp"
 
 #include "catamari/dense_basic_linear_algebra.hpp"
-#include "../../../../../src/lib/MeshFEM/Parallelism.hh"
+#include <MeshFEMCore/Parallelism.hh>
 #include <Eigen/Dense>
 
 namespace catamari {
@@ -3391,7 +3391,7 @@ void Permute(const Perm &permutation, const BlasMatrixView<Field> &in, BlasMatri
 // Perm can be, e.g., Buffer<Int>, ConstBlasMatrixView<Int>
 template <Int BLOCK_SIZE, class Perm, class Field>
 void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatrixView<Field> *out) {
-    BENCHMARK_SCOPED_TIMER_SECTION timer("InversePermute<" + std::to_string(BLOCK_SIZE) + ">");
+    MeshFEM::BENCHMARK_SCOPED_TIMER_SECTION timer("InversePermute<" + std::to_string(BLOCK_SIZE) + ">");
     if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
     for (Int j = 0; j < out->width; ++j) {
         // Apply the permutation.

@@ -22,7 +22,7 @@
 #include "catamari/sparse_ldl/supernodal/factorization.hpp"
 #include "catamari/sparse_ldl/supernodal/supernode_utils-impl.hpp"
 
-#include "../../../../../../../src/lib/MeshFEM/GlobalBenchmark.hh"
+#include <MeshFEMCore/GlobalBenchmark.hh>
 
 #define USE_STACK_DFS_INSTEAD_OF_SERIAL_RECURSION 1
 // USE_TLS_SCHUR_RHS: whether to use a separate thread-local workspace buffer
