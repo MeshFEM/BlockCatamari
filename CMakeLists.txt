@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(Catamari)
+include(CheckCXXSourceCompiles)
+include(CheckCXXSourceRuns)
 
 # CMP0063: Honor visibility properties for all target types.
 if(POLICY CMP0063)
@@ -8,7 +10,7 @@ endif()
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
     set(BLA_VENDOR Apple)
-else()
+else() # Assumes x86
     set(BLA_VENDOR Intel10_64_dyn)
     # set(BLA_VENDOR Intel10_64lp_seq)
 endif()
@@ -21,7 +23,39 @@ if (CATAMARI_WITH_OPENMP)
 endif()
 
 option(CATAMARI_INT64 "Use 64 bit integers" OFF)
-option(CATAMARI_VECTORIZE "Use march=native and enable intrinsics-based kernels" ON)
+option(CATAMARI_INTRINSICS_KERNELS "Whether to enable the handwritten AVX intrinsics kernels for, e.g., Cholesky solve phase when possible" ON)
+
+set(CATAMARI_INTRINSICS_KERNEL_FLAGS)
+if(CATAMARI_INTRINSICS_KERNELS)
+    if(MSVC)
+        set(CATAMARI_INTRINSICS_KERNEL_FLAGS "/arch:AVX2")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|IntelLLVM")
+        set(CATAMARI_INTRINSICS_KERNEL_FLAGS "-mavx;-mfma")
+    endif()
+
+    set(CMAKE_REQUIRED_FLAGS_OLD "${CMAKE_REQUIRED_FLAGS}")
+    string(REPLACE ";" " " CATAMARI_INTRINSICS_KERNEL_FLAGS_STR "${CATAMARI_INTRINSICS_KERNEL_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} ${CATAMARI_INTRINSICS_KERNEL_FLAGS_STR}")
+    set(CATAMARI_INTRINSICS_KERNEL_TEST_SOURCE "
+        #include <immintrin.h>
+        int main() {
+            __m256d a = _mm256_set1_pd(1.0);
+            __m256d b = _mm256_fmadd_pd(a, a, a);
+            __m128d lo = _mm256_castpd256_pd128(b);
+            __m128d hi = _mm256_extractf128_pd(b, 1);
+            __m128d c = _mm_hadd_pd(lo, hi);
+            return _mm_cvtsd_f64(c) == 4.0 ? 0 : 1;
+        }
+    ")
+    if(CMAKE_CROSSCOMPILING)
+        check_cxx_source_compiles("${CATAMARI_INTRINSICS_KERNEL_TEST_SOURCE}" CATAMARI_INTRINSICS_KERNELS_AVAILABLE)
+    else()
+        check_cxx_source_runs("${CATAMARI_INTRINSICS_KERNEL_TEST_SOURCE}" CATAMARI_INTRINSICS_KERNELS_AVAILABLE)
+    endif()
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS_OLD}")
+else()
+    set(CATAMARI_INTRINSICS_KERNELS_AVAILABLE OFF)
+endif()
 
 include(FetchContent)
 
@@ -109,8 +143,8 @@ target_compile_features(quotient INTERFACE cxx_std_14)
 target_link_libraries(quotient INTERFACE mantis specify)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-    target_compile_definitions(mantis INTERFACE -DX86 -DLINUX -DMANTIS_GCC_FUSED_MULTIPLY_ADD)
-    target_compile_definitions(quotient INTERFACE -DX86 -DLINUX -DMANTIS_GCC_FUSED_MULTIPLY_ADD)
+    target_compile_definitions(mantis INTERFACE X86 LINUX MANTIS_GCC_FUSED_MULTIPLY_ADD)
+    target_compile_definitions(quotient INTERFACE X86 LINUX MANTIS_GCC_FUSED_MULTIPLY_ADD)
 endif()
 
 if (CATAMARI_INT64)
@@ -121,39 +155,57 @@ endif()
 # Create the `catamari` library target.
 ################################################################################
 if (NOT TARGET catamari)
-    add_library(catamari INTERFACE)
-    # TODO: actually detect the proper flags here rather than hard-coding for
-    # M1-based Mac and x86-based Linux.
+    set(CATAMARI_SOURCES
+        src/sparse_ldl/supernodal/factorization/trs_kernels.cpp
+    )
+
+    add_library(catamari STATIC ${CATAMARI_SOURCES})
+    set_target_properties(catamari PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-        target_compile_definitions(catamari INTERFACE -DDARWIN -DARM -DCATAMARI_HAVE_FENV_DISABLE_DENORMS -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK)
+        target_compile_definitions(catamari PUBLIC DARWIN CATAMARI_HAVE_FENV_DISABLE_DENORMS CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK)
+        if(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+            target_compile_definitions(catamari PUBLIC X86 CATAMARI_HAVE_XMMINTRIN)
+        else()
+            target_compile_definitions(catamari PUBLIC ARM)
+        endif()
     elseif  (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-        target_compile_definitions(catamari INTERFACE -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DX86 -DLINUX -DCATAMARI_HAVE_XMMINTRIN -DMANTIS_GCC_FUSED_MULTIPLY_ADD -DCATAMARI_HAVE_MKL -DCATAMARI_HAVE_BLAS -DCATAMARI_HAVE_LAPACK) # -DMKL_DIRECT_CALL_SEQ) # DIRECT_CALL seems not to make much of a difference
-        target_include_directories(catamari SYSTEM INTERFACE /usr/include/mkl) # Needed for Ubuntu MKL
+        # TODO: support ARM-based Linux?
+        target_compile_definitions(catamari PUBLIC MANTIS_GCC_FUSED_MULTIPLY_ADD X86 LINUX CATAMARI_HAVE_XMMINTRIN MANTIS_GCC_FUSED_MULTIPLY_ADD CATAMARI_HAVE_MKL CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK) # MKL_DIRECT_CALL_SEQ) # DIRECT_CALL seems not to make much of a difference
+        target_include_directories(catamari SYSTEM PUBLIC /usr/include/mkl) # Needed for Ubuntu MKL
     else()
         message(FATAL_ERROR "Unrecognized CMAKE_SYSTEM_NAME")
     endif()
 
     if (CATAMARI_WITH_OPENMP)
-        target_compile_definitions(catamari INTERFACE -DCATAMARI_OPENMP)
-        target_link_libraries(catamari INTERFACE OpenMP::OpenMP_CXX)
+        target_compile_definitions(catamari PUBLIC CATAMARI_OPENMP)
+        target_link_libraries(catamari PUBLIC OpenMP::OpenMP_CXX)
     endif()
 
     if (CATAMARI_INT64)
-        target_compile_definitions(catamari INTERFACE -DQUOTIENT_USE_64BIT)
+        target_compile_definitions(catamari PUBLIC -DQUOTIENT_USE_64BIT)
     endif()
 
-    if (CATAMARI_VECTORIZE)
-        target_compile_options(catamari INTERFACE -march=native) # TODO: also set macro to configure intrinsics kernel guard
+    if (CATAMARI_INTRINSICS_KERNELS)
+        if (CATAMARI_INTRINSICS_KERNELS_AVAILABLE)
+            target_compile_definitions(catamari PUBLIC CATAMARI_SOLVE_AVX_KERNELS)
+            set_source_files_properties(
+                src/sparse_ldl/supernodal/factorization/trs_kernels.cpp
+                PROPERTIES COMPILE_OPTIONS "${CATAMARI_INTRINSICS_KERNEL_FLAGS}"
+            )
+        else()
+            message(STATUS "Catamari AVX/FMA intrinsics kernels requested but unavailable for this compiler/target")
+        endif()
     endif()
 
-    target_link_libraries(catamari INTERFACE BLAS::BLAS mimalloc quotient mantis specify MeshFEMCore)
-    target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/quotient/include)
-    target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/mantis/include)
-    target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/specify/include)
+    target_link_libraries(catamari PUBLIC BLAS::BLAS mimalloc quotient mantis specify MeshFEMCore)
+    target_include_directories(catamari SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_include_directories(catamari SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/quotient/include)
+    target_include_directories(catamari SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/mantis/include)
+    target_include_directories(catamari SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/specify/include)
 
-    target_include_directories(catamari SYSTEM INTERFACE ${mimalloc_SOURCE_DIR}/include)
+    target_include_directories(catamari SYSTEM PUBLIC ${mimalloc_SOURCE_DIR}/include)
 
-    set_target_properties(catamari PROPERTIES INTERFACE_COMPILE_FEATURES cxx_std_14)
+    target_compile_features(catamari PUBLIC cxx_std_14)
 
 endif()
