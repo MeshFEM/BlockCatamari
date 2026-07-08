@@ -23,6 +23,34 @@ endif()
 option(CATAMARI_INT64 "Use 64 bit integers" OFF)
 option(CATAMARI_VECTORIZE "Use march=native and enable intrinsics-based kernels" ON)
 
+include(FetchContent)
+
+if(NOT TARGET MeshFEMCore)
+    set(MESHFEMCORE_GIT_REPOSITORY "git@github.com:MeshFEM/MeshFEMCore.git"
+        CACHE STRING "MeshFEMCore git repository")
+    set(MESHFEMCORE_GIT_TAG "2867a326f79269660da80846d273e4440817cbe8"
+        CACHE STRING "MeshFEMCore git revision")
+    if(NOT DEFINED MESHFEM_EXTERNAL)
+        set(MESHFEM_EXTERNAL "${CMAKE_CURRENT_SOURCE_DIR}/subprojects"
+            CACHE PATH "External dependency source directory")
+    endif()
+
+    FetchContent_Declare(MeshFEMCore
+        GIT_REPOSITORY ${MESHFEMCORE_GIT_REPOSITORY}
+        GIT_TAG        ${MESHFEMCORE_GIT_TAG}
+        SOURCE_DIR     ${MESHFEM_EXTERNAL}/MeshFEMCore
+    )
+    FetchContent_MakeAvailable(MeshFEMCore)
+endif()
+
+FetchContent_GetProperties(MeshFEMCore)
+if(meshfemcore_SOURCE_DIR)
+    list(APPEND CMAKE_MODULE_PATH "${meshfemcore_SOURCE_DIR}/cmake")
+elseif(DEFINED MESHFEMCORE_ROOT)
+    list(APPEND CMAKE_MODULE_PATH "${MESHFEMCORE_ROOT}/cmake")
+endif()
+list(REMOVE_DUPLICATES CMAKE_MODULE_PATH)
+
 if(NOT COMMAND meshfem_download_project)
     include(MeshFEMCoreDownloadExternal)
 endif()
@@ -30,7 +58,6 @@ endif()
 ################################################################################
 # Bring in `mimalloc` to accelerate Schur complement memory allocation.
 ################################################################################
-include(FetchContent)
 FetchContent_Declare(
   mimalloc
   GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
@@ -119,7 +146,7 @@ if (NOT TARGET catamari)
         target_compile_options(catamari INTERFACE -march=native) # TODO: also set macro to configure intrinsics kernel guard
     endif()
 
-    target_link_libraries(catamari INTERFACE BLAS::BLAS mimalloc quotient mantis specify)
+    target_link_libraries(catamari INTERFACE BLAS::BLAS mimalloc quotient mantis specify MeshFEMCore)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/quotient/include)
     target_include_directories(catamari SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/mantis/include)
