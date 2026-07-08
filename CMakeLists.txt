@@ -22,8 +22,14 @@ if (CATAMARI_WITH_OPENMP)
     find_package(OpenMP REQUIRED)
 endif()
 
+if(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    set(CATAMARI_ON_X86 TRUE)
+else()
+    set(CATAMARI_ON_X86 FALSE)
+endif()
+
 option(CATAMARI_INT64 "Use 64 bit integers" OFF)
-option(CATAMARI_INTRINSICS_KERNELS "Whether to enable the handwritten AVX intrinsics kernels for, e.g., Cholesky solve phase when possible" ON)
+option(CATAMARI_INTRINSICS_KERNELS "Whether to enable the handwritten AVX intrinsics kernels for, e.g., Cholesky solve phase when possible" ${CATAMARI_ON_X86})
 
 set(CATAMARI_INTRINSICS_KERNEL_FLAGS)
 if(CATAMARI_INTRINSICS_KERNELS)
@@ -60,6 +66,7 @@ endif()
 include(FetchContent)
 
 if(NOT TARGET MeshFEMCore)
+    # TODO: change these to https once public.
     set(MESHFEMCORE_GIT_REPOSITORY "git@github.com:MeshFEM/MeshFEMCore.git"
         CACHE STRING "MeshFEMCore git repository")
     set(MESHFEMCORE_GIT_TAG "2867a326f79269660da80846d273e4440817cbe8"
@@ -164,7 +171,7 @@ if (NOT TARGET catamari)
 
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         target_compile_definitions(catamari PUBLIC DARWIN CATAMARI_HAVE_FENV_DISABLE_DENORMS CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK)
-        if(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        if(CATAMARI_ON_X86)
             target_compile_definitions(catamari PUBLIC X86 CATAMARI_HAVE_XMMINTRIN)
         else()
             target_compile_definitions(catamari PUBLIC ARM)
