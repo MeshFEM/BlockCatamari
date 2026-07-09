@@ -64,6 +64,7 @@ else()
 endif()
 
 include(FetchContent)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/MeshFEMFetchEditableRepo.cmake")
 
 if(NOT TARGET MeshFEMCore)
     # TODO: change these to https once public.
@@ -76,6 +77,8 @@ if(NOT TARGET MeshFEMCore)
             CACHE PATH "External dependency source directory")
     endif()
 
+    meshfem_prepare_editable_repo(MeshFEMCore
+        "${MESHFEM_EXTERNAL}/MeshFEMCore" "${MESHFEMCORE_GIT_TAG}")
     FetchContent_Declare(MeshFEMCore
         GIT_REPOSITORY ${MESHFEMCORE_GIT_REPOSITORY}
         GIT_TAG        ${MESHFEMCORE_GIT_TAG}
