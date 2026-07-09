@@ -292,7 +292,7 @@ SparseLDLResult<Field> Factorization<Field>::OpenMPRightLookingLegacy(
     }
   } else {
     const int old_max_threads = GetMaxBlasThreads();
-    SetNumBlasThreads(1);
+    SetNumBlasThreads(1); // Avoid thread oversubscription (in case we're not linked against sequential BLAS)
 
     #pragma omp parallel
     #pragma omp single

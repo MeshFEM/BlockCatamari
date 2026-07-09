@@ -897,7 +897,9 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         if (!success) shared_state.setFailed();
     };
 
-    // const int old_max_threads = GetMaxBlasThreads();
+    const int old_max_threads = GetMaxBlasThreads();
+    SetNumBlasThreads(1); // Avoid thread oversubscription (in case we're not linked against sequential BLAS)
+
     const bool parallel = (max_threads > 1) && (total_work >= min_parallel_work);
 
     if (parallel) {
@@ -959,6 +961,7 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         process_root(num_roots - 1);
         tg.wait();
     }
+    SetNumBlasThreads(old_max_threads);
 
     bool succeeded = !shared_state.hasFailed();
     if (succeeded) {

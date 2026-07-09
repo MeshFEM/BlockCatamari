@@ -71,7 +71,7 @@ void Factorization<Field>::Solve(
   const Int max_threads = get_max_num_tbb_threads();
   if (max_threads > 1) {
     const int old_max_threads = GetMaxBlasThreads();
-    SetNumBlasThreads(1);
+    SetNumBlasThreads(1); // Avoid thread oversubscription (in case we're not linked against sequential BLAS)
 
     // Set up the shared state holding the "supernode rhs" arrays.
     // In order to allow the number of rhs to change without updating
