@@ -8,14 +8,16 @@ if(POLICY CMP0063)
     cmake_policy(SET CMP0063 NEW)
 endif()
 
-if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    set(BLA_VENDOR Apple)
-else() # Assumes x86
-    set(BLA_VENDOR Intel10_64_dyn)
-    # set(BLA_VENDOR Intel10_64lp_seq)
-endif()
+if (NOT TARGET BLAS::BLAS) # Respect any existing BLAS target configured by the parent.
+    if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+        set(BLA_VENDOR Apple)
+    else() # Assumes x86
+        set(BLA_VENDOR Intel10_64_dyn)
+        # set(BLA_VENDOR Intel10_64lp_seq)
+    endif()
 
-find_package(BLAS REQUIRED)
+    find_package(BLAS REQUIRED)
+endif()
 
 option(CATAMARI_WITH_OPENMP "Enable OpenMP support" OFF)
 if (CATAMARI_WITH_OPENMP)
