@@ -131,7 +131,7 @@ inline void MatrixVectorProduct(
   const BlasInt width_blas = matrix.width;
   const BlasInt leading_dim_blas = matrix.leading_dim;
   const BlasInt unit_stride_blas = 1;
-  const BlasComplexFloat beta = 1;
+  const BlasComplexFloat beta = {1.0f, 0.0f};
   BLAS_SYMBOL(cgemv)
   (&trans, &height_blas, &width_blas,
    reinterpret_cast<const BlasComplexFloat*>(&alpha),
@@ -151,7 +151,7 @@ inline void MatrixVectorProduct(
   const BlasInt width_blas = matrix.width;
   const BlasInt leading_dim_blas = matrix.leading_dim;
   const BlasInt unit_stride_blas = 1;
-  const BlasComplexDouble beta = 1;
+  const BlasComplexDouble beta = {1.0, 0.0};
   BLAS_SYMBOL(zgemv)
   (&trans, &height_blas, &width_blas,
    reinterpret_cast<const BlasComplexDouble*>(&alpha),
@@ -1668,8 +1668,12 @@ inline void MatrixMultiplyLowerNormalNormal(
   const BlasInt output_leading_dim_blas = output_matrix->leading_dim;
   BLAS_SYMBOL(cgemmt)
   (&uplo, &trans_left, &trans_right, &output_height_blas,
-   &contraction_size_blas, &alpha, left_matrix.data, &left_leading_dim_blas,
-   right_matrix.data, &right_leading_dim_blas, &beta, output_matrix->data,
+   &contraction_size_blas, reinterpret_cast<const BlasComplexFloat*>(&alpha),
+   reinterpret_cast<const BlasComplexFloat*>(left_matrix.data),
+   &left_leading_dim_blas,
+   reinterpret_cast<const BlasComplexFloat*>(right_matrix.data),
+   &right_leading_dim_blas, reinterpret_cast<const BlasComplexFloat*>(&beta),
+   reinterpret_cast<BlasComplexFloat*>(output_matrix->data),
    &output_leading_dim_blas);
 }
 
@@ -1690,8 +1694,12 @@ inline void MatrixMultiplyLowerNormalNormal(
   const BlasInt output_leading_dim_blas = output_matrix->leading_dim;
   BLAS_SYMBOL(zgemmt)
   (&uplo, &trans_left, &trans_right, &output_height_blas,
-   &contraction_size_blas, &alpha, left_matrix.data, &left_leading_dim_blas,
-   right_matrix.data, &right_leading_dim_blas, &beta, output_matrix->data,
+   &contraction_size_blas, reinterpret_cast<const BlasComplexDouble*>(&alpha),
+   reinterpret_cast<const BlasComplexDouble*>(left_matrix.data),
+   &left_leading_dim_blas,
+   reinterpret_cast<const BlasComplexDouble*>(right_matrix.data),
+   &right_leading_dim_blas, reinterpret_cast<const BlasComplexDouble*>(&beta),
+   reinterpret_cast<BlasComplexDouble*>(output_matrix->data),
    &output_leading_dim_blas);
 }
 #elif defined(CATAMARI_HAVE_BLAS)
@@ -1842,8 +1850,12 @@ inline void MatrixMultiplyLowerNormalTranspose(
   const BlasInt output_leading_dim_blas = output_matrix->leading_dim;
   BLAS_SYMBOL(cgemmt)
   (&uplo, &trans_left, &trans_right, &output_height_blas,
-   &contraction_size_blas, &alpha, left_matrix.data, &left_leading_dim_blas,
-   right_matrix.data, &right_leading_dim_blas, &beta, output_matrix->data,
+   &contraction_size_blas, reinterpret_cast<const BlasComplexFloat*>(&alpha),
+   reinterpret_cast<const BlasComplexFloat*>(left_matrix.data),
+   &left_leading_dim_blas,
+   reinterpret_cast<const BlasComplexFloat*>(right_matrix.data),
+   &right_leading_dim_blas, reinterpret_cast<const BlasComplexFloat*>(&beta),
+   reinterpret_cast<BlasComplexFloat*>(output_matrix->data),
    &output_leading_dim_blas);
 }
 
@@ -1864,8 +1876,12 @@ inline void MatrixMultiplyLowerNormalTranspose(
   const BlasInt output_leading_dim_blas = output_matrix->leading_dim;
   BLAS_SYMBOL(zgemmt)
   (&uplo, &trans_left, &trans_right, &output_height_blas,
-   &contraction_size_blas, &alpha, left_matrix.data, &left_leading_dim_blas,
-   right_matrix.data, &right_leading_dim_blas, &beta, output_matrix->data,
+   &contraction_size_blas, reinterpret_cast<const BlasComplexDouble*>(&alpha),
+   reinterpret_cast<const BlasComplexDouble*>(left_matrix.data),
+   &left_leading_dim_blas,
+   reinterpret_cast<const BlasComplexDouble*>(right_matrix.data),
+   &right_leading_dim_blas, reinterpret_cast<const BlasComplexDouble*>(&beta),
+   reinterpret_cast<BlasComplexDouble*>(output_matrix->data),
    &output_leading_dim_blas);
 }
 #elif defined(CATAMARI_HAVE_BLAS)
@@ -2016,8 +2032,12 @@ inline void MatrixMultiplyLowerTransposeNormal(
   const BlasInt output_leading_dim_blas = output_matrix->leading_dim;
   BLAS_SYMBOL(cgemmt)
   (&uplo, &trans_left, &trans_right, &output_height_blas,
-   &contraction_size_blas, &alpha, left_matrix.data, &left_leading_dim_blas,
-   right_matrix.data, &right_leading_dim_blas, &beta, output_matrix->data,
+   &contraction_size_blas, reinterpret_cast<const BlasComplexFloat*>(&alpha),
+   reinterpret_cast<const BlasComplexFloat*>(left_matrix.data),
+   &left_leading_dim_blas,
+   reinterpret_cast<const BlasComplexFloat*>(right_matrix.data),
+   &right_leading_dim_blas, reinterpret_cast<const BlasComplexFloat*>(&beta),
+   reinterpret_cast<BlasComplexFloat*>(output_matrix->data),
    &output_leading_dim_blas);
 }
 
@@ -2038,8 +2058,12 @@ inline void MatrixMultiplyLowerTransposeNormal(
   const BlasInt output_leading_dim_blas = output_matrix->leading_dim;
   BLAS_SYMBOL(zgemmt)
   (&uplo, &trans_left, &trans_right, &output_height_blas,
-   &contraction_size_blas, &alpha, left_matrix.data, &left_leading_dim_blas,
-   right_matrix.data, &right_leading_dim_blas, &beta, output_matrix->data,
+   &contraction_size_blas, reinterpret_cast<const BlasComplexDouble*>(&alpha),
+   reinterpret_cast<const BlasComplexDouble*>(left_matrix.data),
+   &left_leading_dim_blas,
+   reinterpret_cast<const BlasComplexDouble*>(right_matrix.data),
+   &right_leading_dim_blas, reinterpret_cast<const BlasComplexDouble*>(&beta),
+   reinterpret_cast<BlasComplexDouble*>(output_matrix->data),
    &output_leading_dim_blas);
 }
 #elif defined(CATAMARI_HAVE_BLAS)

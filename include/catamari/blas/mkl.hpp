@@ -8,7 +8,9 @@
 #ifndef CATAMARI_BLAS_MKL_H_
 #define CATAMARI_BLAS_MKL_H_
 
-#include <complex>
+#include "catamari/complex.hpp"
+
+#include <mkl.h>
 
 #define CATAMARI_HAVE_BLAS_PROTOS
 #define CATAMARI_HAVE_LAPACK_PROTOS
@@ -21,13 +23,17 @@
 #define CATAMARI_USE_GEMMT
 
 // TODO(Jack Poulson): Attempt to support 64-bit BLAS when Int = long long int.
-typedef int BlasInt;
-typedef std::complex<float> BlasComplexFloat;
-typedef std::complex<double> BlasComplexDouble;
+typedef MKL_INT BlasInt;
+typedef MKL_Complex8 BlasComplexFloat;
+typedef MKL_Complex16 BlasComplexDouble;
 
-#define MKL_INT BlasInt
-#define MKL_Complex8 BlasComplexFloat
-#define MKL_Complex16 BlasComplexDouble
-#include <mkl.h>
+static_assert(sizeof(catamari::Complex<float>) == sizeof(MKL_Complex8),
+              "catamari::Complex<float> must be ABI-compatible with MKL_Complex8");
+static_assert(sizeof(catamari::Complex<double>) == sizeof(MKL_Complex16),
+              "catamari::Complex<double> must be ABI-compatible with MKL_Complex16");
+static_assert(alignof(catamari::Complex<float>) == alignof(MKL_Complex8),
+              "catamari::Complex<float> must have the same alignment as MKL_Complex8");
+static_assert(alignof(catamari::Complex<double>) == alignof(MKL_Complex16),
+              "catamari::Complex<double> must have the same alignment as MKL_Complex16");
 
 #endif  // ifndef CATAMARI_BLAS_MKL_H_

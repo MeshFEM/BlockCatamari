@@ -183,8 +183,10 @@ if (NOT TARGET catamari)
         endif()
     elseif  (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
         # TODO: support ARM-based Linux?
-        target_compile_definitions(catamari PUBLIC MANTIS_GCC_FUSED_MULTIPLY_ADD X86 LINUX CATAMARI_HAVE_XMMINTRIN MANTIS_GCC_FUSED_MULTIPLY_ADD CATAMARI_HAVE_MKL CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK) # MKL_DIRECT_CALL_SEQ) # DIRECT_CALL seems not to make much of a difference
-        target_include_directories(catamari SYSTEM PUBLIC /usr/include/mkl) # Needed for Ubuntu MKL
+        target_compile_definitions(catamari PUBLIC MANTIS_GCC_FUSED_MULTIPLY_ADD X86 LINUX CATAMARI_HAVE_XMMINTRIN MANTIS_GCC_FUSED_MULTIPLY_ADD CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK)
+        if(TARGET mkl::mkl)
+            target_compile_definitions(catamari PUBLIC CATAMARI_HAVE_MKL)
+        endif()
     else()
         message(FATAL_ERROR "Unrecognized CMAKE_SYSTEM_NAME")
     endif()
