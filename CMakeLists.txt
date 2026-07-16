@@ -8,6 +8,8 @@ if(POLICY CMP0063)
     cmake_policy(SET CMP0063 NEW)
 endif()
 
+set(CATAMARI_USING_MKL FALSE)
+
 if (NOT TARGET BLAS::BLAS) # Respect any existing BLAS target configured by the parent.
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         set(BLA_VENDOR Apple)
@@ -17,6 +19,17 @@ if (NOT TARGET BLAS::BLAS) # Respect any existing BLAS target configured by the 
     endif()
 
     find_package(BLAS REQUIRED)
+endif()
+
+# Basic MKL detection. This should work in the cases we care about
+# (MKL found via explicitly-specified BLA_VENDOR or brought in via a CPM MKL include).
+# Depending on the user install, this still leaves the possibility of a missing `mkl.h`.
+if (TARGET mkl::mkl)
+    set(CATAMARI_USING_MKL TRUE)
+elseif(DEFINED BLA_VENDOR AND "${BLA_VENDOR}" MATCHES "^Intel")
+    set(CATAMARI_USING_MKL TRUE)
+elseif(DEFINED BLAS_LIBRARIES AND "${BLAS_LIBRARIES}" MATCHES "mkl")
+    set(CATAMARI_USING_MKL TRUE)
 endif()
 
 option(CATAMARI_WITH_OPENMP "Enable OpenMP support" OFF)
@@ -184,7 +197,7 @@ if (NOT TARGET catamari)
     elseif  (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
         # TODO: support ARM-based Linux?
         target_compile_definitions(catamari PUBLIC MANTIS_GCC_FUSED_MULTIPLY_ADD X86 LINUX CATAMARI_HAVE_XMMINTRIN MANTIS_GCC_FUSED_MULTIPLY_ADD CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK)
-        if(TARGET mkl::mkl)
+        if(CATAMARI_USING_MKL)
             target_compile_definitions(catamari PUBLIC CATAMARI_HAVE_MKL)
         endif()
     else()
