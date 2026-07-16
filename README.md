@@ -1,5 +1,22 @@
 ![](./images/aztec-40-20pct.png)
 
+# `BlockCatamari`
+This repository contains an accelerated version of the sparse Cholesky factorization ($L L^\top$) routines of the original catamari library created by Jack Poulson. Note that the acceleration work has focused exclusively on the real supernodal Cholesky codepath; other components of the original codebase are currently unsupported. Furthermore, the only supported way to interface with the solver is currently via the wrappers in [MeshFEMSparse](https://github.com/MeshFEM/MeshFEMSparse).
+
+The major changes include:
+- Support for BCSC matrices, leveraging the $d \times d$ block structure inherent in, *e.g.*, finite element problems in $ℝ^d$. This most significantly accelerates the analysis phase, but it also reduces indexing overhead in the numerical phases and lets us dispatch to hand-optimized kernels for matrices that are too small to merit a `BLAS` call.
+- Reimplementing parallelism with `TBB` instead of `OpenMP` to improve portability and avoid bugs that can creep in when linking libraries that use different OpenMP versions.
+- Improving memory management for better scalability. This is particularly important `macOS` where the system `malloc/free` performs especially poorly in multithreaded settings.
+- Fast injection of matrix values into $L$ when beginning the factorization and much faster detection of indefinite matrices.
+
+For additional details on the algorithms and performance improvements, see our accompanying [SIGGRAPH 2026 paper](https://doi.org/10.1145/3811386):
+> Haleh Mohammadian, Xinzhuo Hu, Roi Poranne, and Julian Panetta.
+> **MeshFEM: A Block-accelerated Solver for Nonlinear Finite Elements.**
+> *ACM Transactions on Graphics (Proceedings of SIGGRAPH 2026)*, 45(4), Article 121, 2026.
+> DOI: 10.1145/3811386
+
+---
+# catamari
 [**catamari**](https://hodgestar.com/catamari/) is a
 [C++14](https://en.wikipedia.org/wiki/C%2B%2B14), header-only implementation of
 sequential and
