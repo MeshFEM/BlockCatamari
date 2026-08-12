@@ -26,7 +26,7 @@
 #include <cassert>
 #include "../catamari_config.hh"
 
-#define REUSE_CHOLESKY_FLOWGRAPHS 0
+#define REUSE_CHOLESKY_FLOWGRAPHS 1
 
 // PROCESS_LEAVES_FIRST -- an idefiniteness detection acceleration:
 // In many cases, the indefiniteness of a matrix can be detected
@@ -907,7 +907,10 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         if (shared_state.tbb_ctx) shared_state.tbb_ctx->reset();
         else shared_state.tbb_ctx = std::make_unique<tbb::task_group_context>();
     }
-    else shared_state.tbb_ctx.reset();
+    else {
+        shared_state.cholesky_flowgraphs.clear(); // these maintain references to `tbb_ctx` and must be destroyed before it.
+        shared_state.tbb_ctx.reset();
+    }
 
 #if PROCESS_LEAVES_FIRST
     {
