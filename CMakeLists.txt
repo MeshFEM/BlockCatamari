@@ -32,6 +32,17 @@ elseif(DEFINED BLAS_LIBRARIES AND "${BLAS_LIBRARIES}" MATCHES "mkl")
     set(CATAMARI_USING_MKL TRUE)
 endif()
 
+set(CATAMARI_DISABLE_TBB_CANCELLATION FALSE)
+if(CATAMARI_USING_MKL AND DEFINED MKL_THREADING AND MKL_THREADING STREQUAL "tbb")
+    message(WARNING
+        "Disabling Catamari's TBB cancellation-based indefiniteness detection acceleration because MKL's TBB threading layer is enabled. "
+        "Note that, at least on the tested versions of MKL, the TBB compatibility layer has an apparent bug that causes cancellations "
+        "initiated from outside to trigger an unrecoverable error. Indefiniteness detection will likely be slower in your build; consider "
+        "switching to the Intel or OpenMP threading layers."
+    )
+    set(CATAMARI_DISABLE_TBB_CANCELLATION TRUE)
+endif()
+
 option(CATAMARI_WITH_OPENMP "Enable OpenMP support" OFF)
 if (CATAMARI_WITH_OPENMP)
     find_package(OpenMP REQUIRED)
@@ -186,6 +197,12 @@ if (NOT TARGET catamari)
 
     add_library(catamari STATIC ${CATAMARI_SOURCES})
     set_target_properties(catamari PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+    if(CATAMARI_DISABLE_TBB_CANCELLATION)
+        # Catamari's algorithms are largely implemented in template headers,
+        # so this definition must propagate to consumers.
+        target_compile_definitions(catamari PUBLIC CATAMARI_DISABLE_TBB_CANCELLATION)
+    endif()
 
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
         target_compile_definitions(catamari PUBLIC DARWIN CATAMARI_HAVE_FENV_DISABLE_DENORMS CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK)

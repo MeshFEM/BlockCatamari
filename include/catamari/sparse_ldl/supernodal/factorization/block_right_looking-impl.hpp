@@ -94,8 +94,7 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         result->num_successful_pivots += num_supernode_pivots;
     }
     if (num_supernode_pivots < supernode_size) {
-        shared_state->setFailed();
-        if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
+        shared_state->failAndCancelExecution();
         return false;
     }
 
@@ -131,11 +130,12 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
         Int num_tiles = (lower_block.height + tile_size - 1) / tile_size;
         // Then produce as even-sized tiles as possible.
         Int trsm_tile_size = (lower_block.height + num_tiles - 1) / num_tiles;
-        tbb::parallel_for(tbb::blocked_range<Int>(0, num_tiles, 1), [&lower_block, &diagonal_block, trsm_tile_size](const tbb::blocked_range<Int> &r) {
+        tbb::parallel_for(tbb::blocked_range<Int>(0, num_tiles, 1), [&lower_block, &diagonal_block, trsm_tile_size, shared_state](const tbb::blocked_range<Int> &r) {
             for (Int i_tile = r.begin(); i_tile < r.end(); ++i_tile) {
                 Int i = i_tile * trsm_tile_size;
                 const Int tsize = std::min(lower_block.height - i, trsm_tile_size);
                 BlasMatrixView<Field> tile = lower_block.Submatrix(i, 0, tsize, lower_block.width);
+                if (shared_state->hasFailed()) return; // Stop immediately if another thread encountered a failure!
                 RightLowerAdjointTriangularSolves(diagonal_block.ToConst(), &tile);
             }
         }, *(shared_state->tbb_ctx));
@@ -284,6 +284,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
             // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, InitializeColumns);
 
             for (Int ci = 0; ci < num_children; ++ci) {
+                if (shared_state->hasFailed()) break;
                 const Int child = af.children[child_beg + ci];
                 const Int num_child_diag_indices = af.num_child_diag_indices[child];
                 const Int child_degree = af.child_rel_indices_offsets[child + 1] - af.child_rel_indices_offsets[child];
@@ -309,6 +310,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
 #endif
         std::vector<Int> child_j(num_children); // pointer into the child columns
         for (Int j = 0; j < supernode_size; j += BlockSize) {
+            if (shared_state->hasFailed()) break;
             ldl.template BlockCPlanInitializeFactorBlockColumn<BlockSize>(sno + j, j, diagonal_block);
 
             Field* factor_column = diagonal_block.Pointer(0, j);
@@ -342,6 +344,7 @@ void BlockMergeChildSchurComplements(Int supernode, Factorization<Field> &ldl,
         }
         const Int sc_size = schur_complement.width;
         for (Int j = 0; j < sc_size; j += BlockSize) {
+            if (shared_state->hasFailed()) break;
             FillZerosLowerTriangularMiddleCols(schur_complement.data, j, j + BlockSize, schur_complement.height);
             Int front_j = j + supernode_size;
             Field *schur_column = schur_complement.Pointer(-supernode_size, j);
@@ -441,10 +444,8 @@ bool Factorization<Field>::BlockRightLookingSubtree(
         bool success = BlockRightLookingSubtree<BlockSize>(
                 child, subparams, work_estimates, min_parallel_work,
                 shared_state, resultContrib, stack);
-        if (!success) {
-            shared_state->setFailed();
-            if (shared_state->tbb_ctx) shared_state->tbb_ctx->cancel_group_execution();
-        }
+        if (!success)
+            shared_state->failAndCancelExecution();
     };
 
     // Allocate this supernode's Schur complement either in an existing subtree
@@ -925,11 +926,12 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
             const Int sno = ordering_.supernode_offsets[s];
             const Int supernode_size = lower_block.width;
 
+            if (shared_state.hasFailed()) return false; // Stop immediately if another thread encountered a failure!
             BlockCPlanInitializeFactorSupernodeColumns<BlockSize>(sno, supernode_size, diagonal_block); // TODO: only the diagonal block?
+            if (shared_state.hasFailed()) return false; // Stop immediately if another thread encountered a failure!
             Int num_pivots = LowerCholeskyFactorizationDynamicBLASDispatch(control_.blas_block_size, &diagonal_block);
             if (num_pivots < supernode_size) {
-                shared_state.setFailed();
-                if (shared_state.tbb_ctx) shared_state.tbb_ctx->cancel_group_execution();
+                shared_state.failAndCancelExecution();
                 return false;
             }
             return true;

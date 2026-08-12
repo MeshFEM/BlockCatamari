@@ -462,11 +462,15 @@ bool Factorization<Field>::OpenMPRightLookingSubtree(
           const Int child = ordering_.assembly_forest.children[child_beg + child_index]; // sorted_children[child_index];
           tg.run([&process_child, &result_contributions, child, child_index, shared_state, &tg]() {
                 process_child(child, &result_contributions[child_index], nullptr);
+#ifndef CATAMARI_DISABLE_TBB_CANCELLATION
                 if (shared_state->hasFailed()) tg.cancel();
+#endif
             });
       }
       process_child(ordering_.assembly_forest.children[child_end - 1], &result_contributions[num_children - 1], nullptr);
+#ifndef CATAMARI_DISABLE_TBB_CANCELLATION
       if (shared_state->hasFailed()) tg.cancel();
+#endif
       auto status = tg.wait();
       // FG_STOP_TIMER(shared_state->finegrained_timers, supernode, Recurse);
 

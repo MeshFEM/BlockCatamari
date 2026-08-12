@@ -36,7 +36,6 @@ struct CholeskyFlowgraph {
                   + (num_tiles * (num_tiles - 1)) / 2 // for the subdiagonal blocks
                   + (num_tiles * (num_tiles + 1) * (num_tiles - 1)) / 6; // for the low-rank updates
         nodes.reserve(num_nodes);
-        num_pivots = 0;
 
         for (Int j = 0; j < num_tiles; ++j) {
             Int tstart_j = j * tile_size;
@@ -44,6 +43,7 @@ struct CholeskyFlowgraph {
 
             // Cholesky factorization of diagonal block (j, j)
             nodes.emplace_back(g, [this, tstart_j, tsize_j](const tbb::flow::continue_msg &msg) {
+                if (hasFailed()) return msg;
                 BlasMatrixView<Field> block_j_j = matrix.Submatrix(tstart_j, tstart_j, tsize_j, tsize_j);
                 const Int p = LowerCholeskyFactorization(block_size, &block_j_j);
                 num_pivots += p; // Note: diagonal blocks are factorized sequentially due to dependencies, so this pivot count accumulation need not be atomic!
@@ -67,6 +67,7 @@ struct CholeskyFlowgraph {
 
                 // Solve for subdiagonal block (i, j)
                 nodes.emplace_back(g, [this, tstart_j, tstart_i, tsize_j, tsize_i](const tbb::flow::continue_msg &msg) {
+                    if (hasFailed()) return msg;
                     BlasMatrixView<Field> block_j_j = matrix.Submatrix(tstart_j, tstart_j, tsize_j, tsize_j);
                     BlasMatrixView<Field> block_i_j = matrix.Submatrix(tstart_i, tstart_j, tsize_i, tsize_j);
                     RightLowerAdjointTriangularSolves(block_j_j.ToConst(), &block_i_j);
@@ -90,6 +91,7 @@ struct CholeskyFlowgraph {
                     Int tsize_j2 = std::min(tile_size, height - tstart_j2);
                     // Low-rank update of block (i, j2) for j2 < i
                     nodes.emplace_back(g, [this, tstart_j, tstart_i, tstart_j2, tsize_j, tsize_i, tsize_j2](const tbb::flow::continue_msg &msg) {
+                        if (hasFailed()) return msg;
                         BlasMatrixView<Field> block_i_j  = matrix.Submatrix(tstart_i , tstart_j , tsize_i , tsize_j );
                         BlasMatrixView<Field> block_j2_j = matrix.Submatrix(tstart_j2, tstart_j , tsize_j2, tsize_j );
                         BlasMatrixView<Field> block_i_j2 = matrix.Submatrix(tstart_i , tstart_j2, tsize_i , tsize_j2);
@@ -108,6 +110,7 @@ struct CholeskyFlowgraph {
 
                 // Low-rank update of the diagonal block (i, i)
                 nodes.emplace_back(g, [this, tstart_j, tstart_i, tsize_j, tsize_i](const tbb::flow::continue_msg &msg) {
+                    if (hasFailed()) return msg;
                     BlasMatrixView<Field> block_i_i = matrix.Submatrix(tstart_i, tstart_i, tsize_i, tsize_i);
                     BlasMatrixView<Field> block_i_j = matrix.Submatrix(tstart_i, tstart_j, tsize_i, tsize_j);
                     LowerNormalHermitianOuterProduct(Real{-1}, block_i_j.ToConst(), Real{1}, &block_i_i);
@@ -126,9 +129,10 @@ struct CholeskyFlowgraph {
         if (serial) return LowerCholeskyFactorizationDynamicBLASDispatch(block_size, &matrix);
 
         num_pivots = 0;
+        unsetFailed();
         nodes[0].try_put(tbb::flow::continue_msg());
         g.wait_for_all();
-        if (num_pivots < matrix.height) g.reset(); // Graph must be reset after it is cancelled.
+        if (g.is_cancelled()) g.reset(); // Graph must be reset after it is cancelled.
         return num_pivots;
     }
 
@@ -153,17 +157,25 @@ struct CholeskyFlowgraph {
     std::vector<Node> nodes;
     Int num_pivots;
 
-    // Failure notification sent in advance of cancelling all tasks in `ctx`.
+    // Failure notification sent in advance of (potentially) cancelling all tasks in `ctx`.
     // This is helpful, e.g., for ensuring a parent sparse Cholesky
     // factorization is aware of the failure before its `task_group(ctx)`
     // tasks stop running.
     std::function<void()> failureCallback;
 
 private:
-    void m_cancelExecution() const {
+    void m_cancelExecution() {
+        setFailed();
         if (failureCallback) failureCallback();
+#ifndef CATAMARI_DISABLE_TBB_CANCELLATION
         ctx.cancel_group_execution();
+#endif
     }
+
+    void unsetFailed() { m_failed.store(false, std::memory_order_relaxed); }
+    void   setFailed() { m_failed.store(true, std::memory_order_relaxed); }
+    bool   hasFailed() const { return m_failed.load(std::memory_order_relaxed); }
+    std::atomic<bool> m_failed;
 };
 
 } // namespace catamari
