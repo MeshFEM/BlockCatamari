@@ -17,6 +17,14 @@
 
 #define CATAMARI_UNUSED QUOTIENT_UNUSED
 
+#if defined(_MSC_VER)
+#define CATAMARI_RESTRICT __restrict
+#elif defined(__GNUC__) || defined(__clang__)
+#define CATAMARI_RESTRICT __restrict__
+#else
+#define CATAMARI_RESTRICT
+#endif
+
 #ifdef CATAMARI_ENABLE_TIMERS
 #define CATAMARI_START_TIMER(timer) timer.Start()
 #define CATAMARI_STOP_TIMER(timer) timer.Stop()

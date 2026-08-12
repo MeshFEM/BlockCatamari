@@ -13,6 +13,7 @@
 
 #include "catamari/complex.hpp"
 #include "catamari/integers.hpp"
+#include "catamari/macros.hpp"
 
 #include <Eigen/Dense>
 
@@ -66,8 +67,8 @@ template<Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjoint<double, BLOCK_SIZE> { // Optimized kernel for double
     static void run(const bool /* conjugate */,
              const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
 #if defined(__APPLE__)
             MultiplyLowerBlockAdjointEigenChunked<BLOCK_SIZE>::run(
 #else
@@ -82,14 +83,14 @@ struct MultiplyLowerBlockAdjoint<double, BLOCK_SIZE> { // Optimized kernel for d
 template<Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjointEigenUnchunked {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        const double * __restrict__  rhs_ptr = B_data;
-              double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const double * CATAMARI_RESTRICT  rhs_ptr = B_data;
+              double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
             for (Int k = 0; k < supernode_size; ++k) {
-                const double * __restrict__ a_ptr = A_data + k * A_leading_dim;
+                const double * CATAMARI_RESTRICT a_ptr = A_data + k * A_leading_dim;
                 double val = 0;
                 for (Int i = 0; i < degree; i += BLOCK_SIZE) {
                     using VecBlock = VecN_T<double, BLOCK_SIZE>;
@@ -109,32 +110,32 @@ struct MultiplyLowerBlockAdjointEigenUnchunked {
 template<>
 struct MultiplyLowerBlockAdjointEigenUnchunked<2> {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim);
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim);
 };
 
 template<>
 struct MultiplyLowerBlockAdjointEigenUnchunked<3> {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim);
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim);
 };
 
 template<>
 struct MultiplyLowerBlockAdjointEigenChunkedAlternate<2> {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim);
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim);
 };
 #endif // CATAMARI_SOLVE_AVX_KERNELS
 
 template<Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjointEigenChunked {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        const double * __restrict__  rhs_ptr = B_data;
-              double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const double * CATAMARI_RESTRICT  rhs_ptr = B_data;
+              double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
             constexpr Int CHUNK_SIZE = (BLOCK_SIZE == 1) ? 4 : 2; // Currently tuned for M4 Pro...
@@ -170,10 +171,10 @@ struct MultiplyLowerBlockAdjointEigenChunked {
             }
 #else
             const Int k_start = k;
-            const double * __restrict__ a_ptr_start = A_data + k_start * A_leading_dim;
+            const double * CATAMARI_RESTRICT a_ptr_start = A_data + k_start * A_leading_dim;
             for (Int i = 0; i < degree; i += BLOCK_SIZE) {
                 VecBlock b_entries = Eigen::Map<const VecBlock>(rhs_ptr + I[i]);
-                const double * __restrict__ a_ptr = a_ptr_start + i;
+                const double * CATAMARI_RESTRICT a_ptr = a_ptr_start + i;
                 for (k = k_start; k < supernode_size; ++k) {
                     srhs_ptr[k] -= Eigen::Map<const VecBlock>(a_ptr).dot(b_entries);
                     a_ptr += A_leading_dim;
@@ -189,17 +190,17 @@ struct MultiplyLowerBlockAdjointEigenChunked {
 template<Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunking order from above (to match MultiplyLowerBlock kernel)
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        const double * __restrict__  rhs_ptr = B_data;
-              double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const double * CATAMARI_RESTRICT  rhs_ptr = B_data;
+              double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
           constexpr Int CHUNK_SIZE = 6;
           using Vec = VecN_T<double, CHUNK_SIZE>;
           Int i;
           for (i = 0; i <= degree - CHUNK_SIZE; i += CHUNK_SIZE) {
-              const double * __restrict__ a_row = A_data + i;
+              const double * CATAMARI_RESTRICT a_row = A_data + i;
 
               Vec rhs_strip;
               rhs_strip[0] = rhs_ptr[I[i + 0]];
@@ -227,7 +228,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunk
           }
           if constexpr ((BLOCK_SIZE == 2) || (BLOCK_SIZE == 3)) { // must divide CHUNK_SIZE!
               for (; i < degree; i += BLOCK_SIZE) {
-                  const double * __restrict__ a_row = A_data + i;
+                  const double * CATAMARI_RESTRICT a_row = A_data + i;
                   using VBlock = VecN_T<double, BLOCK_SIZE>;
                   VBlock rhs_strip = Eigen::Map<const VBlock>(rhs_ptr + I[i]);
                   using MMap = Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, BLOCK_SIZE>, 0, Eigen::OuterStride<>>;
@@ -240,7 +241,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunk
           }
           else {
               for (; i < degree; ++i) {
-                  const double * __restrict__ a_row = A_data + i;
+                  const double * CATAMARI_RESTRICT a_row = A_data + i;
                   const double rhs_val = rhs_ptr[I[i]];
                   for (Int k = 0; k < supernode_size; ++k) {
                       srhs_ptr[k] -= (*a_row) * rhs_val;
@@ -258,10 +259,10 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunk
 template<Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chunking order from above (to match MultiplyLowerBlock kernel)
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        const double * __restrict__  rhs_ptr = B_data;
-              double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const double * CATAMARI_RESTRICT  rhs_ptr = B_data;
+              double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
           constexpr Int CHUNK_SIZE = 4;
@@ -276,7 +277,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chun
               // rhs_strip[4] = rhs_ptr[I[i + 4]];
               // rhs_strip[5] = rhs_ptr[I[i + 5]];
 
-              const double * __restrict__ a_row = A_data + i;
+              const double * CATAMARI_RESTRICT a_row = A_data + i;
               Int k = 0;
               {
                   constexpr Int INNER_CHUNK_SIZE = 4;
@@ -297,7 +298,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chun
           // Remaining rows
           if constexpr ((BLOCK_SIZE == 2) || (BLOCK_SIZE == 3)) { // must divide CHUNK_SIZE!
               for (; i < degree; i += BLOCK_SIZE) {
-                  const double * __restrict__ a_row = A_data + i;
+                  const double * CATAMARI_RESTRICT a_row = A_data + i;
                   using VBlock = VecN_T<double, BLOCK_SIZE>;
                   VBlock rhs_strip = Eigen::Map<const VBlock>(rhs_ptr + I[i]);
                   using MMap = Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, BLOCK_SIZE>, 0, Eigen::OuterStride<>>;
@@ -309,7 +310,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chun
           }
           else {
               for (; i < degree; ++i) {
-                  const double * __restrict__ a_row = A_data + i;
+                  const double * CATAMARI_RESTRICT a_row = A_data + i;
                   const double rhs_val = rhs_ptr[I[i]];
                   for (Int k = 0; k < supernode_size; ++k) {
                       srhs_ptr[k] -= (*a_row) * rhs_val;
@@ -328,13 +329,13 @@ template<Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjointSmall { // Optimized kernel for double
     static void run(
              const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        double * __restrict__ b_col = B_data;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        double * CATAMARI_RESTRICT b_col = B_data;
         for (Int j = 0; j < num_rhs; ++j) {
-            double * __restrict__ b_col_supernode = b_col + supernode_start;
+            double * CATAMARI_RESTRICT b_col_supernode = b_col + supernode_start;
             for (Int i = 0; i < degree; ++i) {
-                const double * __restrict__ a_ptr = A_data + i;
+                const double * CATAMARI_RESTRICT a_ptr = A_data + i;
                 const double b_entry = b_col[I[i]];
                 for (Int k = 0; k < supernode_size; ++k) {
                     b_col_supernode[k] -= (*a_ptr) * b_entry;
@@ -350,22 +351,22 @@ template<>
 struct MultiplyLowerBlockAdjointSmall<2> {
     static void run(
              const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-        double * __restrict__ b_col = B_data;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        double * CATAMARI_RESTRICT b_col = B_data;
         for (Int j = 0; j < num_rhs; ++j) {
-            double * __restrict__ b_col_supernode = b_col + supernode_start;
+            double * CATAMARI_RESTRICT b_col_supernode = b_col + supernode_start;
 #if 0
             Eigen::Map<Eigen::VectorXd> b_map(b_col_supernode, supernode_size);
             for (Int i = 0; i < degree; i += 2) {
-                const double * __restrict__ a_ptr = A_data + i;
+                const double * CATAMARI_RESTRICT a_ptr = A_data + i;
                 const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i]);
                 Eigen::Map<const Eigen::Matrix<double, 2, Eigen::Dynamic>, 0, Eigen::OuterStride<>> A_map(a_ptr, 2, supernode_size, Eigen::OuterStride<>(A_leading_dim));
                 b_map -= A_map.transpose() * b_strip;
             }
 #else
             for (Int i = 0; i < degree; i += 2) {
-                const double * __restrict__ a_ptr = A_data + i;
+                const double * CATAMARI_RESTRICT a_ptr = A_data + i;
                 const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i]);
 
                 for (Int k = 0; k < supernode_size; k += 2) {
@@ -395,8 +396,8 @@ struct MultiplyLowerBlockAdjointSmall<2> {
 template<class Field, Int BLOCK_SIZE>
 struct MultiplyLowerBlock { // `catamari_legacy` implementation
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const Field * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, Field * __restrict__ B_data, const Int B_leading_dim) {
+             const Field * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, Field * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
         for (Int j = 0; j < num_rhs; ++j) {
             Field *b_col = B_data;
             for (Int k = 0; k < supernode_size; ++k) {
@@ -414,18 +415,18 @@ struct MultiplyLowerBlock { // `catamari_legacy` implementation
 template<>
 struct MultiplyLowerBlock<double, 2> { // Optimized x86 kernel for double
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim);
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim);
 };
 #endif
 
 template<Int BLOCK_SIZE>
 struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-              double * __restrict__  rhs_ptr = B_data;
-        const double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+              double * CATAMARI_RESTRICT  rhs_ptr = B_data;
+        const double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
 #if 1
@@ -433,7 +434,7 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
           using Vec = VecN_T<double, CHUNK_SIZE>;
           Int i;
           for (i = 0; i <= degree - CHUNK_SIZE; i += CHUNK_SIZE) {
-              const double * __restrict__ a_row = A_data + i;
+              const double * CATAMARI_RESTRICT a_row = A_data + i;
 
               Vec val;
               if constexpr (BLOCK_SIZE == 1) {
@@ -461,7 +462,7 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
               rhs_ptr[I[i + 5]] -= val[5];
           }
           for (; i < degree; ++i) {
-              const double * __restrict__ a_row = A_data + i;
+              const double * CATAMARI_RESTRICT a_row = A_data + i;
               double val;
               if constexpr (BLOCK_SIZE == 1) {
                   val = (*a_row) * srhs_ptr[0];
@@ -491,7 +492,7 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
              // Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, Eigen::Dynamic>, 0, Stride> A_block(A_data + i, BLOCK_SIZE, supernode_size, Stride(A_leading_dim));
              // Eigen::Map<Vec>(rhs_ptr + I[i]) -= A_block * Eigen::Map<const Eigen::VectorXd>(srhs_ptr, supernode_size);
 
-             const double * __restrict__ a_row = A_data + i;
+             const double * CATAMARI_RESTRICT a_row = A_data + i;
              Vec val = MMap(a_row, BLOCK_SIZE, BLOCK_SIZE, Stride(A_leading_dim)) * CVMap(srhs_ptr);
              for (Int k = BLOCK_SIZE; k < supernode_size; k += BLOCK_SIZE) {
                  a_row += BLOCK_SIZE * A_leading_dim;
@@ -514,9 +515,9 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
 template<class Field, Int BLOCK_SIZE>
 struct SolveLowerTri {
     static void run(const Int supernode_size,
-             const Field * __restrict__ L_data, const Int L_leading_dim,
-             Field * __restrict__ b) {
-        const Field *__restrict__ L_col = L_data;
+             const Field * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             Field * CATAMARI_RESTRICT b) {
+        const Field *CATAMARI_RESTRICT L_col = L_data;
         for (Int j = 0; j < supernode_size; ++j) {
             b[j] /= L_col[j];
             const Field eta = b[j];
@@ -531,16 +532,16 @@ struct SolveLowerTri {
 template<>
 struct SolveLowerTri<double, 2> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-             double * __restrict__ b) {
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             double * CATAMARI_RESTRICT b) {
         // using MMap = Eigen::Map<const Eigen::MatrixXd, Eigen::Aligned16, Eigen::OuterStride<>>;
         // using VMap = Eigen::Map<Eigen::VectorXd, Eigen::Aligned16>;
         // MMap(L_data, supernode_size, supernode_size, Eigen::OuterStride<>(L_leading_dim)).triangularView<Eigen::Lower>().solveInPlace(VMap(b, supernode_size));
 
-        const double *__restrict__ L_col_a = L_data;
-        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
-        const double *__restrict__ L_col_c = L_col_b + L_leading_dim;
-        const double *__restrict__ L_col_d = L_col_c + L_leading_dim;
+        const double *CATAMARI_RESTRICT L_col_a = L_data;
+        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
+        const double *CATAMARI_RESTRICT L_col_d = L_col_c + L_leading_dim;
         using V2d = Vec2_T<double>;
         using  VMap = Eigen::Map<      V2d, Eigen::Aligned16>;
         using CVMap = Eigen::Map<const V2d, Eigen::Aligned16>;
@@ -591,10 +592,10 @@ struct SolveLowerTri<double, 2> {
 template<>
 struct SolveLowerTri<double, 2> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-             double * __restrict__ b) {
-    const double *__restrict__ L_col_a = L_data;
-    const double *__restrict__ L_col_b = L_data + L_leading_dim;
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             double * CATAMARI_RESTRICT b) {
+    const double *CATAMARI_RESTRICT L_col_a = L_data;
+    const double *CATAMARI_RESTRICT L_col_b = L_data + L_leading_dim;
 
     for (Int j = 0; j < supernode_size; j += 2) {
         const double *col_a = L_col_a;
@@ -637,11 +638,11 @@ struct SolveLowerTri<double, 2> {
 template<>
 struct SolveLowerTri<double, 3> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-             double * __restrict__ b) {
-        const double *__restrict__ L_col_a = L_data;
-        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
-        const double *__restrict__ L_col_c = L_col_b + L_leading_dim;
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             double * CATAMARI_RESTRICT b) {
+        const double *CATAMARI_RESTRICT L_col_a = L_data;
+        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
         using V3d = Vec3_T<double>;
         using  VMap = Eigen::Map<      V3d>;
         using CVMap = Eigen::Map<const V3d>;
@@ -673,9 +674,9 @@ struct SolveLowerTri<double, 3> {
 template<class Field, Int BLOCK_SIZE>
 struct SolveLowerTriAdjoint {
     static void run(const Int supernode_size,
-            const Field * __restrict__ L_data, const Int L_leading_dim,
-            Field * __restrict__ b) {
-        const Field * __restrict__ L_col = L_data + (supernode_size - 1) * L_leading_dim;
+            const Field * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+            Field * CATAMARI_RESTRICT b) {
+        const Field * CATAMARI_RESTRICT L_col = L_data + (supernode_size - 1) * L_leading_dim;
         for (Int j = supernode_size - 1; j >= 0; --j) {
             Field eta = b[j];
             for (Int i = j + 1; i < supernode_size; ++i)
@@ -691,17 +692,17 @@ struct SolveLowerTriAdjoint {
 template<>
 struct SolveLowerTriAdjoint<double, 2> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-                 double * __restrict__ b);
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+                 double * CATAMARI_RESTRICT b);
 };
 #else
 template<>
 struct SolveLowerTriAdjoint<double, 2> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-             double * __restrict__ b) {
-        const double *__restrict__ L_col_a = L_data + L_leading_dim * (supernode_size - 2);
-        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             double * CATAMARI_RESTRICT b) {
+        const double *CATAMARI_RESTRICT L_col_a = L_data + L_leading_dim * (supernode_size - 2);
+        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
         using V2d = Vec2_T<double>;
         using  VMap = Eigen::Map<      V2d, Eigen::Aligned16>;
         using CVMap = Eigen::Map<const V2d, Eigen::Aligned16>;
@@ -733,18 +734,18 @@ struct SolveLowerTriAdjoint<double, 2> {
 template<>
 struct SolveLowerTriAdjoint<double, 3> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-                 double * __restrict__ b);
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+                 double * CATAMARI_RESTRICT b);
 };
 #else
 template<>
 struct SolveLowerTriAdjoint<double, 3> {
     static void run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-             double * __restrict__ b) {
-        const double *__restrict__ L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
-        const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
-        const double *__restrict__ L_col_c = L_col_b + L_leading_dim;
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             double * CATAMARI_RESTRICT b) {
+        const double *CATAMARI_RESTRICT L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
+        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
         using V3d = Vec3_T<double>;
         using  VMap = Eigen::Map<      V3d>;
         using CVMap = Eigen::Map<const V3d>;

@@ -37,7 +37,7 @@ struct ScopedEnableFlushToZero {
     ScopedEnableFlushToZero() {
 #ifdef CATAMARI_HAVE_XMMINTRIN
         m_mode = _MM_GET_FLUSH_ZERO_MODE();
-#else
+#elif defined(CATAMARI_HAVE_FENV_DISABLE_DENORMS)
         fegetenv(&m_env);
 #endif
         EnableFlushToZero();
@@ -46,7 +46,7 @@ struct ScopedEnableFlushToZero {
     ~ScopedEnableFlushToZero() {
 #ifdef CATAMARI_HAVE_XMMINTRIN
         _MM_SET_FLUSH_ZERO_MODE(m_mode);
-#else
+#elif defined(CATAMARI_HAVE_FENV_DISABLE_DENORMS)
         fesetenv(&m_env);
 #endif
     }
@@ -54,7 +54,7 @@ struct ScopedEnableFlushToZero {
 private:
 #ifdef CATAMARI_HAVE_XMMINTRIN
     int m_mode;
-#else
+#elif defined(CATAMARI_HAVE_FENV_DISABLE_DENORMS)
     fenv_t m_env;
 #endif
 };

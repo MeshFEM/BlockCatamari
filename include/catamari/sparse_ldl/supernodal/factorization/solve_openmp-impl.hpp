@@ -138,9 +138,9 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
 #if 1
     const Int *child_rel_indices = ordering_.assembly_forest.child_rel_indices.Data() + ordering_.assembly_forest.child_rel_indices_offsets[child];
     for (Int j = 0; j < num_rhs; ++j) {
-        const Field* __restrict__ crhs_col = child_right_hand_sides.Pointer(0, j);
-        Field*       __restrict__  rhs_col = right_hand_sides->Pointer(0, j);
-        Field*       __restrict__ mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
+        const Field* CATAMARI_RESTRICT crhs_col = child_right_hand_sides.Pointer(0, j);
+        Field*       CATAMARI_RESTRICT  rhs_col = right_hand_sides->Pointer(0, j);
+        Field*       CATAMARI_RESTRICT mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
 
         for (Int i = 0; i < num_child_diag_indices; i += BLOCK_SIZE)
             VMap(rhs_col + child_indices[i]) += CVMap(crhs_col + i);
@@ -150,9 +150,9 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     }
 #else
     for (Int j = 0; j < num_rhs; ++j) {
-        Field* __restrict__  rhs_col = right_hand_sides->Pointer(0, j);
-        Field* __restrict__ mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
-        const Field* __restrict__ crhs_col = child_right_hand_sides.Pointer(0, j);
+        Field* CATAMARI_RESTRICT  rhs_col = right_hand_sides->Pointer(0, j);
+        Field* CATAMARI_RESTRICT mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
+        const Field* CATAMARI_RESTRICT crhs_col = child_right_hand_sides.Pointer(0, j);
 
         for (Int i = 0; i < num_child_diag_indices; i += BLOCK_SIZE) {
             const Int row = child_indices[i];

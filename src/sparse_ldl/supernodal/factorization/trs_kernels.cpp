@@ -8,15 +8,15 @@ namespace supernodal_ldl {
 namespace trs_kernels {
 
 void MultiplyLowerBlockAdjointEigenUnchunked<2>::run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-    const double * __restrict__ rhs_ptr  = B_data;
-          double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+    const double * CATAMARI_RESTRICT rhs_ptr  = B_data;
+          double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
     for (Int j = 0; j < num_rhs; ++j) {
         for (Int k = 0; k < supernode_size; k += 2) {
-            const double * __restrict__ a0 = A_data + k * A_leading_dim;
-            const double * __restrict__ a1 = a0 + A_leading_dim;
+            const double * CATAMARI_RESTRICT a0 = A_data + k * A_leading_dim;
+            const double * CATAMARI_RESTRICT a1 = a0 + A_leading_dim;
             __m128d acc0 = _mm_setzero_pd();
             __m128d acc1 = _mm_setzero_pd();
             for (Int i = 0; i < degree; i += 2) {
@@ -40,16 +40,16 @@ void MultiplyLowerBlockAdjointEigenUnchunked<2>::run(const Int *I, const Int sup
 }
 
 void MultiplyLowerBlockAdjointEigenUnchunked<3>::run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-    const double * __restrict__ rhs_ptr  = B_data;
-          double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+    const double * CATAMARI_RESTRICT rhs_ptr  = B_data;
+          double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
     for (Int j = 0; j < num_rhs; ++j) {
         for (Int k = 0; k < supernode_size; k += 3) {
-            const double * __restrict__ a0 = A_data + k * A_leading_dim;
-            const double * __restrict__ a1 = a0 + A_leading_dim;
-            const double * __restrict__ a2 = a1 + A_leading_dim;
+            const double * CATAMARI_RESTRICT a0 = A_data + k * A_leading_dim;
+            const double * CATAMARI_RESTRICT a1 = a0 + A_leading_dim;
+            const double * CATAMARI_RESTRICT a2 = a1 + A_leading_dim;
             // Accumulators `acc*` accumulate cwise products of each column of a 3x3 block of A:
             //     +---+---+---+
             //     | 0 | 1 | 2 |
@@ -65,7 +65,7 @@ void MultiplyLowerBlockAdjointEigenUnchunked<3>::run(const Int *I, const Int sup
             __m128d acc3 = _mm_setzero_pd();
             double acc4 = 0;
             for (Int i = 0; i < degree; i += 3) {
-                const double * __restrict__ b_ptr = rhs_ptr + I[i];
+                const double * CATAMARI_RESTRICT b_ptr = rhs_ptr + I[i];
                 __m128d b = _mm_loadu_pd(b_ptr);
 
                 __m128d a0v = _mm_loadu_pd(a0);
@@ -101,11 +101,11 @@ void MultiplyLowerBlockAdjointEigenUnchunked<3>::run(const Int *I, const Int sup
 }
 
 void MultiplyLowerBlockAdjointEigenChunkedAlternate<2>::run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-    double * __restrict__ b_col = B_data;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+    double * CATAMARI_RESTRICT b_col = B_data;
     for (Int j = 0; j < num_rhs; ++j) {
-        double* __restrict__ srhs_ptr = B_data + supernode_start + j * B_leading_dim;
+        double* CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start + j * B_leading_dim;
 
         Int i = 0;
         for (; i + 8 <= degree; i += 8) {
@@ -114,8 +114,8 @@ void MultiplyLowerBlockAdjointEigenChunkedAlternate<2>::run(const Int *I, const 
             __m128d b2 = _mm_load_pd(b_col + I[i + 4]);
             __m128d b3 = _mm_load_pd(b_col + I[i + 6]);
 
-            const double * __restrict__ a0 = A_data + i;
-            const double * __restrict__ a1 = a0 + A_leading_dim;
+            const double * CATAMARI_RESTRICT a0 = A_data + i;
+            const double * CATAMARI_RESTRICT a1 = a0 + A_leading_dim;
 
             Int k = 0;
             for (; k < supernode_size; k += 2) {
@@ -142,8 +142,8 @@ void MultiplyLowerBlockAdjointEigenChunkedAlternate<2>::run(const Int *I, const 
             __m128d b0 = _mm_load_pd(b_col + I[i]);
             __m128d b1 = _mm_load_pd(b_col + I[i + 2]);
 
-            const double * __restrict__ a0 = A_data + i;
-            const double * __restrict__ a1 = a0 + A_leading_dim;
+            const double * CATAMARI_RESTRICT a0 = A_data + i;
+            const double * CATAMARI_RESTRICT a1 = a0 + A_leading_dim;
 
             Int k = 0;
             for (; k < supernode_size; k += 2) {
@@ -163,8 +163,8 @@ void MultiplyLowerBlockAdjointEigenChunkedAlternate<2>::run(const Int *I, const 
         for (; i < degree; i += 2) {
             __m128d b0 = _mm_load_pd(b_col + I[i]);
 
-            const double * __restrict__ a0 = A_data + i;
-            const double * __restrict__ a1 = a0 + A_leading_dim;
+            const double * CATAMARI_RESTRICT a0 = A_data + i;
+            const double * CATAMARI_RESTRICT a1 = a0 + A_leading_dim;
 
             Int k = 0;
             for (; k < supernode_size; k += 2) {
@@ -186,16 +186,16 @@ void MultiplyLowerBlockAdjointEigenChunkedAlternate<2>::run(const Int *I, const 
 }
 
 void MultiplyLowerBlock<double, 2>::run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * __restrict__ A_data, const Int A_leading_dim,
-             const Int num_rhs, double * __restrict__ B_data, const Int B_leading_dim) {
-          double * __restrict__  rhs_ptr = B_data;
-    const double * __restrict__ srhs_ptr = B_data + supernode_start;
+             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+          double * CATAMARI_RESTRICT  rhs_ptr = B_data;
+    const double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
     Int i = 0;
     for (; i + 8 <= degree; i += 8) {
         __m256d acc_0 = _mm256_setzero_pd();
         __m256d acc_1 = _mm256_setzero_pd();
 
-        const double* __restrict__ a_ptr = A_data + i;  // points to A(i,0)
+        const double* CATAMARI_RESTRICT a_ptr = A_data + i;  // points to A(i,0)
 
         for (Int k = 0; k < supernode_size; ++k) {
             __m256d L_pair_0 = _mm256_loadu_pd(a_ptr);
@@ -239,7 +239,7 @@ void MultiplyLowerBlock<double, 2>::run(const Int *I, const Int supernode_start,
     for (; i + 4 <= degree; i += 4) {
         __m256d acc = _mm256_setzero_pd();
 
-        const double* __restrict__ a_ptr = A_data + i;  // points to A(i,0)
+        const double* CATAMARI_RESTRICT a_ptr = A_data + i;  // points to A(i,0)
 
         for (Int k = 0; k < supernode_size; ++k) {
             __m256d a4   = _mm256_loadu_pd(a_ptr);
@@ -266,7 +266,7 @@ void MultiplyLowerBlock<double, 2>::run(const Int *I, const Int supernode_start,
     }
 
     if (i < degree) {
-        const double* __restrict__ a_ptr = A_data + i;
+        const double* CATAMARI_RESTRICT a_ptr = A_data + i;
 
         // accumulate contribution for rows i and i+1
         __m128d acc_0 = _mm_setzero_pd();
@@ -292,11 +292,11 @@ void MultiplyLowerBlock<double, 2>::run(const Int *I, const Int supernode_start,
 }
 
 void SolveLowerTriAdjoint<double, 2>::run(const Int supernode_size,
-             const double * __restrict__ L_data, const Int L_leading_dim,
-                   double * __restrict__ b) {
+             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+                   double * CATAMARI_RESTRICT b) {
     // start from last 2 columns in the supernode
-    const double* __restrict__ L_col_a = L_data + L_leading_dim * (supernode_size - 2);
-    const double* __restrict__ L_col_b = L_col_a + L_leading_dim;
+    const double* CATAMARI_RESTRICT L_col_a = L_data + L_leading_dim * (supernode_size - 2);
+    const double* CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
 
     for (Int j = supernode_size - 2; j >= 0; j -= 2) {
         __m128d acc0 = _mm_setzero_pd();
@@ -331,11 +331,11 @@ void SolveLowerTriAdjoint<double, 2>::run(const Int supernode_size,
 }
 
 void SolveLowerTriAdjoint<double, 3>::run(const Int supernode_size,
-        const double * __restrict__ L_data, const Int L_leading_dim,
-              double * __restrict__ b) {
-    const double *__restrict__ L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
-    const double *__restrict__ L_col_b = L_col_a + L_leading_dim;
-    const double *__restrict__ L_col_c = L_col_b + L_leading_dim;
+        const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+              double * CATAMARI_RESTRICT b) {
+    const double *CATAMARI_RESTRICT L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
+    const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+    const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
 
     for (Int j = supernode_size - 3; j >= 0; j -= 3) {
         __m128d acc0 = _mm_setzero_pd();

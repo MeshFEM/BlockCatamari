@@ -3419,15 +3419,15 @@ void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatr
     if (in.width != out->width || in.height != out->height) throw std::runtime_error("Size mismatch");
     for (Int j = 0; j < out->width; ++j) {
         // Apply the permutation.
-        const Field * __restrict__ in_ptr = in.Pointer(0, j);
-        Field * __restrict__ out_ptr = out->Pointer(0, j);
+        const Field * CATAMARI_RESTRICT in_ptr = in.Pointer(0, j);
+        Field * CATAMARI_RESTRICT out_ptr = out->Pointer(0, j);
         if (out->height % BLOCK_SIZE != 0) { throw std::runtime_error("InversePermute: height must be a multiple of BLOCK_SIZE"); }
 
         Int blockHeight = out->height / BLOCK_SIZE;
 
         auto permute_range = [out_ptr, in_ptr, &iperm](const tbb::blocked_range<Int> &r) {
             const Int end = r.end() * BLOCK_SIZE;
-            Field * __restrict__ dst = out_ptr + r.begin() * BLOCK_SIZE;
+            Field * CATAMARI_RESTRICT dst = out_ptr + r.begin() * BLOCK_SIZE;
             for (Int i = BLOCK_SIZE * r.begin(); i < end; i += BLOCK_SIZE) {
                 using Vec = Eigen::Matrix<Field, BLOCK_SIZE, 1>;
                 Eigen::Map<Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>{dst}
