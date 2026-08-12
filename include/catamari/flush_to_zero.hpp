@@ -8,6 +8,8 @@
 #ifndef CATAMARI_FLUSH_TO_ZERO_H_
 #define CATAMARI_FLUSH_TO_ZERO_H_
 
+#include <catamari/macros.hpp>
+
 #ifdef CATAMARI_HAVE_XMMINTRIN
 #include <xmmintrin.h>
 #elif CATAMARI_HAVE_FENV_DISABLE_DENORMS
@@ -25,11 +27,11 @@ inline void EnableFlushToZero() {
   _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 #elif CATAMARI_HAVE_FENV_DISABLE_DENORMS
 #pragma FENV_ACCESS ON
-#ifdef X86
+#if defined(__x86_64__) || defined(__i386__)
   fesetenv(FE_DFL_DISABLE_SSE_DENORMS_ENV);
-#elif defined(ARM)
+#elif defined(__aarch64__) || defined(__arm__)
   fesetenv(FE_DFL_DISABLE_DENORMS_ENV);
-#endif  // ifdef X86
+#endif  // architecture ifdef
 #endif  // ifdef CATAMARI_HAVE_XMMINTRIN
 }
 
