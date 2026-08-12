@@ -888,7 +888,6 @@ private:
 
   template<Int BlockSize>
   SparseLDLResult<Field> BlockRightLooking(); // matrix data is accessed via the ConversionPlan!
-  SparseLDLResult<Field> OpenMPRightLooking( const CoordinateMatrix<Field>& matrix);
 
   template<Int BlockSize>
   bool BlockRightLookingSubtree(
@@ -896,15 +895,6 @@ private:
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
       const Buffer<double>& work_estimates, double min_parallel_work,
       RightLookingSharedState<Field>* shared_state,
-      SparseLDLResult<Field>* result,
-      SchurComplementStorage<Field> *subtreeStorage = nullptr);
-
-  bool OpenMPRightLookingSubtree(
-      Int supernode, const CoordinateMatrix<Field>& matrix,
-      const DynamicRegularizationParams<Field>& dynamic_reg_params,
-      const Buffer<double>& work_estimates, double min_parallel_work,
-      RightLookingSharedState<Field>* shared_state,
-      Buffer<PrivateState<Field>>* private_states,
       SparseLDLResult<Field>* result,
       SchurComplementStorage<Field> *subtreeStorage = nullptr);
 
@@ -926,13 +916,6 @@ private:
   bool LeftLookingSupernodeFinalize(
       Int main_supernode,
       const DynamicRegularizationParams<Field>& dynamic_reg_params,
-      SparseLDLResult<Field>* result);
-
-  bool OpenMPRightLookingSupernodeFinalize(
-      Int supernode,
-      const DynamicRegularizationParams<Field>& dynamic_reg_params,
-      RightLookingSharedState<Field>* shared_state,
-      Buffer<PrivateState<Field>>* private_state,
       SparseLDLResult<Field>* result);
 
   //////////////////////////////////////////////////////////////////////////////
@@ -1033,7 +1016,6 @@ private:
 #include "catamari/sparse_ldl/supernodal/factorization/block_right_looking-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking_legacy_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/right_looking-impl.hpp"
-#include "catamari/sparse_ldl/supernodal/factorization/right_looking_openmp-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/solve-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/factorization/solve_openmp-impl.hpp"
 
