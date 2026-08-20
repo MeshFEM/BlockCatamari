@@ -15,12 +15,12 @@
 // is passed independently of which architecture is currently being compiled.
 // We therefore check the architecture here to ensure `xmmintrin.h` is only
 // included when compiling for x86_64 or i386.
-#if defined(CATAMARI_HAVE_XMMINTRIN) && !(defined(__x86_64__) || defined(__i386__))
+#if defined(CATAMARI_HAVE_XMMINTRIN) && !(defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86))
 #undef CATAMARI_HAVE_XMMINTRIN
 #endif
 
 // The same goes for AVX kernels, which build only for x86_64 or i386 architectures.
-#if defined(CATAMARI_SOLVE_AVX_KERNELS) && !(defined(__x86_64__) || defined(__i386__))
+#if defined(CATAMARI_SOLVE_AVX_KERNELS) && !(defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86))
 #warning "CATAMARI_SOLVE_AVX_KERNELS is defined, but the current architecture is not x86_64 or i386. AVX kernels will not be used."
 #undef CATAMARI_SOLVE_AVX_KERNELS
 #endif
