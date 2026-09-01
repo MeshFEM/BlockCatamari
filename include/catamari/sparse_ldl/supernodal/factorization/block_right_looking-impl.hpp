@@ -77,12 +77,12 @@ bool Factorization<Field>::BlockRightLookingSupernodeFinalize(
 #if REUSE_CHOLESKY_FLOWGRAPHS
             auto &fg = shared_state->cholesky_flowgraphs[supernode];
             if (!fg) {
-                fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.blas_block_size, control_.factor_tile_size);
+                fg = std::make_unique<CholeskyFlowgraph<Field>>(*(shared_state->tbb_ctx), diagonal_block, control_.factor_tile_size, control_.blas_block_size);
                 fg->failureCallback = [shared_state]() { shared_state->setFailed(); };
             }
             num_supernode_pivots = fg->run(diagonal_block);
 #else
-            CholeskyFlowgraph<Field> fg(*(shared_state->tbb_ctx), diagonal_block, control_.blas_block_size, control_.factor_tile_size);
+            CholeskyFlowgraph<Field> fg(*(shared_state->tbb_ctx), diagonal_block, control_.factor_tile_size, control_.blas_block_size);
             fg.failureCallback = [shared_state]() { shared_state->setFailed(); };
             num_supernode_pivots = fg.run(diagonal_block);
 #endif

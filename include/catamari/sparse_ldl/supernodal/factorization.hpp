@@ -134,10 +134,10 @@ struct Control {
   // // The algorithmic block size for the factorization.
   Int blas_block_size = 64;
 
-  // The size of the matrix tiles for factorization OpenMP tasks.
-  Int factor_tile_size = 128;
+  // The size of the matrix tiles for factorization TBB/OpenMP tasks.
+  Int factor_tile_size = 256;
 
-  // The size of the matrix tiles for dense outer product OpenMP tasks.
+  // The size of the matrix tiles for dense outer product TBB/OpenMP tasks.
   Int outer_product_tile_size = 240;
 
   // The number of columns to group into a single task when multithreading

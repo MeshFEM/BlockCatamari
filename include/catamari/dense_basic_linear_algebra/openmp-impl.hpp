@@ -127,6 +127,7 @@ void TBBLowerNormalHermitianOuterProduct(
   const Real alpha_copy = alpha;
   const Real beta_copy = beta;
   const ConstBlasMatrixView<Field> left_matrix_copy = left_matrix;
+  // std::cout << "TBBLowerNormalHermitianOuterProduct: height = " << height << ", rank = " << rank << std::endl;
 
   tbb::task_group tg(ctx);
   for (Int j = 0; j < height; j += tile_size) {

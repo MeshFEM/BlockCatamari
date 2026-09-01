@@ -22,12 +22,13 @@ struct CholeskyFlowgraph {
     using Node = tbb::flow::continue_node<tbb::flow::continue_msg>;
     using Real = ComplexBase<Field>;
 
-    CholeskyFlowgraph(tbb::task_group_context &ctx_, const BlasMatrixView<double> &matrix_, Int tile_size, Int block_size_, bool force_serial = false)
+    CholeskyFlowgraph(tbb::task_group_context &ctx_, const BlasMatrixView<Field> &matrix_, Int tile_size, Int block_size_, bool force_serial = false)
         : block_size(block_size_), ctx(ctx_), matrix(matrix_), g(ctx)
     {
         Int height = matrix.height;
         serial = force_serial || (height < 3 * tile_size); // Note: we don't check for the number of available TBB threads here, since that involves a potentially expensive mutex lock.
         if (serial) return;
+        // std::cout << "Constructing Cholesky factorization for matrix of size " << height << " with tile size " << tile_size << std::endl;
 
         Int num_tiles = (height + tile_size - 1) / tile_size; // Number of tiles along width and height
         Eigen::Matrix<Node *, Eigen::Dynamic, Eigen::Dynamic> last_update;
