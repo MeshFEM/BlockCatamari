@@ -126,26 +126,25 @@ void TBBLowerNormalHermitianOuterProduct(
   const Int rank = left_matrix.width;
   const Real alpha_copy = alpha;
   const Real beta_copy = beta;
-  const ConstBlasMatrixView<Field> left_matrix_copy = left_matrix;
   // std::cout << "TBBLowerNormalHermitianOuterProduct: height = " << height << ", rank = " << rank << std::endl;
 
   tbb::task_group tg(ctx);
   for (Int j = 0; j < height; j += tile_size) {
-    tg.run([tile_size, j, height, rank, &left_matrix_copy, &output_matrix, alpha_copy, beta_copy]()
+    tg.run([tile_size, j, height, rank, &left_matrix, &output_matrix, alpha_copy, beta_copy]()
         {
           const Int tsize = std::min(height - j, tile_size);
-          const ConstBlasMatrixView<Field> column_block = left_matrix_copy.Submatrix(j, 0, tsize, rank);
-          BlasMatrixView<Field> output_block            =   output_matrix->Submatrix(j, j, tsize, tsize);
+          const ConstBlasMatrixView<Field> column_block =   left_matrix. Submatrix(j, 0, tsize, rank);
+          BlasMatrixView<Field> output_block            = output_matrix->Submatrix(j, j, tsize, tsize);
           LowerNormalHermitianOuterProduct(alpha_copy, column_block, beta_copy, &output_block);
         });
 
     for (Int i = j + tile_size; i < height; i += tile_size) {
-      tg.run([tile_size, i, j, height, rank, &left_matrix_copy, &output_matrix, alpha_copy, beta_copy]() {
+      tg.run([tile_size, i, j, height, rank, &left_matrix, &output_matrix, alpha_copy, beta_copy]() {
         const Int   row_tsize  = std::min(height - i, tile_size);
         const Int column_tsize = std::min(height - j, tile_size);
-        const ConstBlasMatrixView<Field> row_block    = left_matrix_copy.Submatrix(i, 0,    row_tsize, rank);
-        const ConstBlasMatrixView<Field> column_block = left_matrix_copy.Submatrix(j, 0, column_tsize, rank);
-        BlasMatrixView<Field>            output_block = output_matrix->  Submatrix(i, j, row_tsize, column_tsize);
+        const ConstBlasMatrixView<Field> row_block    =   left_matrix. Submatrix(i, 0,    row_tsize, rank);
+        const ConstBlasMatrixView<Field> column_block =   left_matrix. Submatrix(j, 0, column_tsize, rank);
+        BlasMatrixView<Field>            output_block = output_matrix->Submatrix(i, j, row_tsize, column_tsize);
         MatrixMultiplyNormalAdjoint(Field{alpha_copy}, row_block, column_block, Field{beta_copy}, &output_block);
       });
     }

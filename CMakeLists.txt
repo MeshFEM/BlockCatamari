@@ -206,7 +206,7 @@ if (NOT TARGET catamari)
     endif()
 
     if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-        target_compile_definitions(catamari PUBLIC DARWIN CATAMARI_HAVE_FENV_DISABLE_DENORMS CATAMARI_HAVE_BLAS CATAMARI_HAVE_LAPACK)
+        target_compile_definitions(catamari PUBLIC DARWIN CATAMARI_HAVE_FENV_DISABLE_DENORMS CATAMARI_HAVE_BLAS CATAMARI_HAVE_ACCELERATE CATAMARI_HAVE_LAPACK)
         if(CATAMARI_ON_X86)
             target_compile_definitions(catamari PUBLIC X86 CATAMARI_HAVE_XMMINTRIN)
         else()

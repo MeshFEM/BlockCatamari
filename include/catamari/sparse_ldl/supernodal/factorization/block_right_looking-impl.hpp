@@ -24,6 +24,7 @@
 #include <MeshFEMCore/ParallelVectorOps.hh>
 #include "SchurComplementStorage.hpp"
 #include <cassert>
+#include <optional>
 #include "../catamari_config.hh"
 
 #define REUSE_CHOLESKY_FLOWGRAPHS 1
@@ -898,10 +899,14 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         if (!success) shared_state.setFailed();
     };
 
-    const int old_max_threads = GetMaxBlasThreads();
-    SetNumBlasThreads(1); // Avoid thread oversubscription (in case we're not linked against sequential BLAS)
-
     const bool parallel = (max_threads > 1) && (total_work >= min_parallel_work);
+
+    // Avoid thread oversubscription (in case we're not linked against sequential BLAS)
+    // by ensuring that BLAS is single-threaded throughout factorization.
+    // This needs to be done also for every TBB worker thread since, e.g,
+    // Apple Accelerate only provides thread-local control.
+    std::optional<BlasSingleThreadingObserver> blas_single_threading_observer;
+    if (parallel) blas_single_threading_observer.emplace();
 
     if (parallel) {
         if (shared_state.tbb_ctx) shared_state.tbb_ctx->reset();
@@ -966,7 +971,6 @@ SparseLDLResult<Field> Factorization<Field>::BlockRightLooking() {
         process_root(num_roots - 1);
         tg.wait();
     }
-    SetNumBlasThreads(old_max_threads);
 
     bool succeeded = !shared_state.hasFailed();
     if (succeeded) {
