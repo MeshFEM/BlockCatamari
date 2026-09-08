@@ -386,7 +386,7 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
     Eigen::Map<Eigen::Matrix<Field, Eigen::Dynamic, 1>>(
         diagonal_block.data, diagonal_block.LeadingDimension() * diagonal_block.Width()).setZero();
     m_inputData.injectEntries(sno, sno + supernode_size, factor_values_.Data());
-    if (m_inputData.sigma != 0) {
+    if (!m_inputData.Bx && m_inputData.sigma != 0) {
         for (Int j = 0, cj = 0; j < supernode_size; ++j)
             diagonal_block(j, j) += m_inputData.sigma;
     }

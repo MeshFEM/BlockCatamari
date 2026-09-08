@@ -32,18 +32,20 @@ LowerFactor<Field>::LowerFactor(const Buffer<Int>& supernode_sizes,
     blocks[supernode].height = degree;
     blocks[supernode].width = supernode_size;
     blocks[supernode].leading_dim = degree;
-    blocks[supernode].data = storage.Data() + num_entries;
+    blocks[supernode].data = storage.Data() ? storage.Data() + num_entries : nullptr;
 
     degree_sum += degree;
     num_entries += degree * supernode_size;
   }
 
   if (storage.Data() == nullptr) {
-    // Legacy mode: allocate storage for the values
-    // and offset all the block pointers to point into this storage.
+    // Legacy mode: allocate owned storage before forming any block pointers.
     values_.Resize(num_entries);
+    Int offset = 0;
     for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
-      blocks[supernode].data += (values_.Data() - (double *)nullptr);
+      auto &block = blocks[supernode];
+      block.data = values_.Data() ? values_.Data() + offset : nullptr;
+      offset += block.height * block.width;
     }
   }
 

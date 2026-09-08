@@ -16,6 +16,7 @@
 #include "catamari/macros.hpp"
 
 #include <Eigen/Dense>
+#include <type_traits>
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -58,7 +59,7 @@ struct MultiplyLowerBlockAdjoint { // `catamari_legacy` implementation
 };
 
 template<Int BLOCK_SIZE> struct MultiplyLowerBlockAdjointEigenUnchunked;
-template<Int BLOCK_SIZE> struct MultiplyLowerBlockAdjointEigenChunked;
+template<Int BLOCK_SIZE, class Field = double> struct MultiplyLowerBlockAdjointEigenChunked;
 template<Int BLOCK_SIZE> struct MultiplyLowerBlockAdjointEigenChunkedAlternate;
 template<Int BLOCK_SIZE> struct MultiplyLowerBlockAdjointEigenChunkedOuterInner;
 template<Int BLOCK_SIZE> struct MultiplyLowerBlockAdjointSmall;
@@ -77,6 +78,14 @@ struct MultiplyLowerBlockAdjoint<double, BLOCK_SIZE> { // Optimized kernel for d
                 I, supernode_start, supernode_size, degree,
                 A_data, A_leading_dim,
                 num_rhs, B_data, B_leading_dim);
+    }
+};
+
+template<Int BLOCK_SIZE>
+struct MultiplyLowerBlockAdjoint<float, BLOCK_SIZE> {
+    static void run(bool, const Int *I, Int start, Int size, Int degree,
+                    const float *A, Int lda, Int nrhs, float *B, Int ldb) {
+        MultiplyLowerBlockAdjointEigenChunked<BLOCK_SIZE, float>::run(I, start, size, degree, A, lda, nrhs, B, ldb);
     }
 };
 
@@ -129,19 +138,19 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate<2> {
 };
 #endif // CATAMARI_SOLVE_AVX_KERNELS
 
-template<Int BLOCK_SIZE>
+template<Int BLOCK_SIZE, class Field>
 struct MultiplyLowerBlockAdjointEigenChunked {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
-             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
-        const double * CATAMARI_RESTRICT  rhs_ptr = B_data;
-              double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
+             const Field * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, Field * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const Field * CATAMARI_RESTRICT  rhs_ptr = B_data;
+              Field * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
             constexpr Int CHUNK_SIZE = (BLOCK_SIZE == 1) ? 4 : 2; // Currently tuned for M4 Pro...
-            using Vec = VecN_T<double, CHUNK_SIZE>;
-            using VecBlock = VecN_T<double, BLOCK_SIZE>;
-            using Block = Eigen::Matrix<double, BLOCK_SIZE, CHUNK_SIZE>;
+            using Vec = VecN_T<Field, CHUNK_SIZE>;
+            using VecBlock = VecN_T<Field, BLOCK_SIZE>;
+            using Block = Eigen::Matrix<Field, BLOCK_SIZE, CHUNK_SIZE>;
             // Eigen::Stride Gotcha: for single-row matrices, even in column
             // major format, it is the **inner stride** that is used to
             // determine the pointer increment between consecutive entries.
@@ -164,17 +173,17 @@ struct MultiplyLowerBlockAdjointEigenChunked {
             }
 #if 1
             for (; k < supernode_size; ++k) {
-                double val = 0;
+                Field val = 0;
                 for (Int i = 0; i < degree; i += BLOCK_SIZE)
                     val += Eigen::Map<const VecBlock>(A_data + i + k * A_leading_dim).dot(Eigen::Map<const VecBlock>(rhs_ptr + I[i]));
                 srhs_ptr[k] -= val;
             }
 #else
             const Int k_start = k;
-            const double * CATAMARI_RESTRICT a_ptr_start = A_data + k_start * A_leading_dim;
+            const Field * CATAMARI_RESTRICT a_ptr_start = A_data + k_start * A_leading_dim;
             for (Int i = 0; i < degree; i += BLOCK_SIZE) {
                 VecBlock b_entries = Eigen::Map<const VecBlock>(rhs_ptr + I[i]);
-                const double * CATAMARI_RESTRICT a_ptr = a_ptr_start + i;
+                const Field * CATAMARI_RESTRICT a_ptr = a_ptr_start + i;
                 for (k = k_start; k < supernode_size; ++k) {
                     srhs_ptr[k] -= Eigen::Map<const VecBlock>(a_ptr).dot(b_entries);
                     a_ptr += A_leading_dim;
@@ -398,8 +407,8 @@ struct MultiplyLowerBlock { // `catamari_legacy` implementation
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
              const Field * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
              const Int num_rhs, Field * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        Field *b_col = B_data;
         for (Int j = 0; j < num_rhs; ++j) {
-            Field *b_col = B_data;
             for (Int k = 0; k < supernode_size; ++k) {
                 const Field eta = b_col[k + supernode_start];
                 const Field *A_col = A_data + k * A_leading_dim;
@@ -420,21 +429,21 @@ struct MultiplyLowerBlock<double, 2> { // Optimized x86 kernel for double
 };
 #endif
 
-template<Int BLOCK_SIZE>
-struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
+template<class Field, Int BLOCK_SIZE>
+struct MultiplyLowerBlockEigen { // Shared Eigen kernel for float/double
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
-             const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
-             const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
-              double * CATAMARI_RESTRICT  rhs_ptr = B_data;
-        const double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
+             const Field * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
+             const Int num_rhs, Field * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+              Field * CATAMARI_RESTRICT  rhs_ptr = B_data;
+        const Field * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
         for (Int j = 0; j < num_rhs; ++j) {
 #if 1
           constexpr Int CHUNK_SIZE = 6;
-          using Vec = VecN_T<double, CHUNK_SIZE>;
+          using Vec = VecN_T<Field, CHUNK_SIZE>;
           Int i;
           for (i = 0; i <= degree - CHUNK_SIZE; i += CHUNK_SIZE) {
-              const double * CATAMARI_RESTRICT a_row = A_data + i;
+              const Field * CATAMARI_RESTRICT a_row = A_data + i;
 
               Vec val;
               if constexpr (BLOCK_SIZE == 1) {
@@ -445,8 +454,8 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
                   }
               }
               else {
-                  using MMap = Eigen::Map<const Eigen::Matrix<double, CHUNK_SIZE, BLOCK_SIZE>, 0, Eigen::OuterStride<>>;
-                  using CVMap = Eigen::Map<const VecN_T<double, BLOCK_SIZE>>;
+                  using MMap = Eigen::Map<const Eigen::Matrix<Field, CHUNK_SIZE, BLOCK_SIZE>, 0, Eigen::OuterStride<>>;
+                  using CVMap = Eigen::Map<const VecN_T<Field, BLOCK_SIZE>>;
                   val = MMap(a_row, CHUNK_SIZE, BLOCK_SIZE, Eigen::OuterStride<>(A_leading_dim)) * CVMap(srhs_ptr);
                   for (Int k = BLOCK_SIZE; k < supernode_size; k += BLOCK_SIZE) {
                       a_row += BLOCK_SIZE * A_leading_dim;
@@ -462,8 +471,8 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
               rhs_ptr[I[i + 5]] -= val[5];
           }
           for (; i < degree; ++i) {
-              const double * CATAMARI_RESTRICT a_row = A_data + i;
-              double val;
+              const Field * CATAMARI_RESTRICT a_row = A_data + i;
+              Field val;
               if constexpr (BLOCK_SIZE == 1) {
                   val = (*a_row) * srhs_ptr[0];
                   for (Int k = 1; k < supernode_size; ++k) {
@@ -472,8 +481,8 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
                   }
               }
               else {
-                  using MMap = Eigen::Map<const Eigen::Matrix<double, 1, BLOCK_SIZE>, 0, Eigen::InnerStride<>>;
-                  using CVMap = Eigen::Map<const VecN_T<double, BLOCK_SIZE>>;
+                  using MMap = Eigen::Map<const Eigen::Matrix<Field, 1, BLOCK_SIZE>, 0, Eigen::InnerStride<>>;
+                  using CVMap = Eigen::Map<const VecN_T<Field, BLOCK_SIZE>>;
                   val = MMap(a_row, 1, BLOCK_SIZE, Eigen::InnerStride<>(A_leading_dim)).transpose().dot(CVMap(srhs_ptr));
                   for (Int k = BLOCK_SIZE; k < supernode_size; k += BLOCK_SIZE) {
                       a_row += BLOCK_SIZE * A_leading_dim;
@@ -483,8 +492,8 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
               rhs_ptr[I[i]] -= val;
           }
 #else
-          using Vec = VecN_T<double, BLOCK_SIZE>;
-          using Mat = MatN_T<double, BLOCK_SIZE>;
+          using Vec = VecN_T<Field, BLOCK_SIZE>;
+          using Mat = MatN_T<Field, BLOCK_SIZE>;
           using Stride = std::conditional_t<BLOCK_SIZE == 1, Eigen::InnerStride<>, Eigen::OuterStride<>>;
           using CVMap = Eigen::Map<const Vec>;
           using MMap = Eigen::Map<const Mat, 0, Stride>;
@@ -492,7 +501,7 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
              // Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, Eigen::Dynamic>, 0, Stride> A_block(A_data + i, BLOCK_SIZE, supernode_size, Stride(A_leading_dim));
              // Eigen::Map<Vec>(rhs_ptr + I[i]) -= A_block * Eigen::Map<const Eigen::VectorXd>(srhs_ptr, supernode_size);
 
-             const double * CATAMARI_RESTRICT a_row = A_data + i;
+             const Field * CATAMARI_RESTRICT a_row = A_data + i;
              Vec val = MMap(a_row, BLOCK_SIZE, BLOCK_SIZE, Stride(A_leading_dim)) * CVMap(srhs_ptr);
              for (Int k = BLOCK_SIZE; k < supernode_size; k += BLOCK_SIZE) {
                  a_row += BLOCK_SIZE * A_leading_dim;
@@ -506,6 +515,11 @@ struct MultiplyLowerBlock<double, BLOCK_SIZE> { // Optimized kernel for double
         }
     }
 };
+
+template<Int BLOCK_SIZE>
+struct MultiplyLowerBlock<double, BLOCK_SIZE> : MultiplyLowerBlockEigen<double, BLOCK_SIZE> { };
+template<Int BLOCK_SIZE>
+struct MultiplyLowerBlock<float, BLOCK_SIZE> : MultiplyLowerBlockEigen<float, BLOCK_SIZE> { };
 
 ////////////////////////////////////////////////////////////////////////////////
 // SolveLowerTri
@@ -528,25 +542,24 @@ struct SolveLowerTri {
     }
 };
 
-#if 1 // We can't seem to do better than the Eigen-vectorized implementation with intrinsics...
-template<>
-struct SolveLowerTri<double, 2> {
+template<class Field>
+struct SolveLowerTriEigen2 {
     static void run(const Int supernode_size,
-             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
-             double * CATAMARI_RESTRICT b) {
+             const Field * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             Field * CATAMARI_RESTRICT b) {
         // using MMap = Eigen::Map<const Eigen::MatrixXd, Eigen::Aligned16, Eigen::OuterStride<>>;
         // using VMap = Eigen::Map<Eigen::VectorXd, Eigen::Aligned16>;
         // MMap(L_data, supernode_size, supernode_size, Eigen::OuterStride<>(L_leading_dim)).triangularView<Eigen::Lower>().solveInPlace(VMap(b, supernode_size));
 
-        const double *CATAMARI_RESTRICT L_col_a = L_data;
-        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
-        const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
-        const double *CATAMARI_RESTRICT L_col_d = L_col_c + L_leading_dim;
-        using V2d = Vec2_T<double>;
-        using  VMap = Eigen::Map<      V2d, Eigen::Aligned16>;
-        using CVMap = Eigen::Map<const V2d, Eigen::Aligned16>;
+        const Field *CATAMARI_RESTRICT L_col_a = L_data;
+        const Field *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        using Vec2 = Vec2_T<Field>;
+        using  VMap = Eigen::Map<      Vec2, std::is_same<Field, double>::value ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using CVMap = Eigen::Map<const Vec2, std::is_same<Field, double>::value ? Eigen::Aligned16 : Eigen::Unaligned>;
 
 #if 0
+        const Field *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
+        const Field *CATAMARI_RESTRICT L_col_d = L_col_c + L_leading_dim;
         Int j = 0;
         for (; j + 4 <= supernode_size; j += 4) {
             VMap eta(b + j);
@@ -588,6 +601,13 @@ struct SolveLowerTri<double, 2> {
         }
     }
 };
+
+template<>
+struct SolveLowerTri<float, 2> : SolveLowerTriEigen2<float> { };
+
+#if 1 // We can't seem to do better than the Eigen-vectorized implementation with intrinsics...
+template<>
+struct SolveLowerTri<double, 2> : SolveLowerTriEigen2<double> { };
 #else
 template<>
 struct SolveLowerTri<double, 2> {
@@ -635,17 +655,17 @@ struct SolveLowerTri<double, 2> {
 };
 #endif
 
-template<>
-struct SolveLowerTri<double, 3> {
+template<class Field>
+struct SolveLowerTriEigen3 {
     static void run(const Int supernode_size,
-             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
-             double * CATAMARI_RESTRICT b) {
-        const double *CATAMARI_RESTRICT L_col_a = L_data;
-        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
-        const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
-        using V3d = Vec3_T<double>;
-        using  VMap = Eigen::Map<      V3d>;
-        using CVMap = Eigen::Map<const V3d>;
+             const Field * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             Field * CATAMARI_RESTRICT b) {
+        const Field *CATAMARI_RESTRICT L_col_a = L_data;
+        const Field *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        const Field *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
+        using Vec3 = Vec3_T<Field>;
+        using  VMap = Eigen::Map<      Vec3>;
+        using CVMap = Eigen::Map<const Vec3>;
 
         for (Int j = 0; j < supernode_size; j += 3) {
             VMap eta(b + j);
@@ -665,6 +685,11 @@ struct SolveLowerTri<double, 3> {
         }
     }
 };
+
+template<>
+struct SolveLowerTri<float, 3> : SolveLowerTriEigen3<float> { };
+template<>
+struct SolveLowerTri<double, 3> : SolveLowerTriEigen3<double> { };
 
 ////////////////////////////////////////////////////////////////////////////////
 // SolveLowerTriAdjoint
@@ -695,23 +720,24 @@ struct SolveLowerTriAdjoint<double, 2> {
              const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
                  double * CATAMARI_RESTRICT b);
 };
-#else
-template<>
-struct SolveLowerTriAdjoint<double, 2> {
+#endif
+
+template<class Field>
+struct SolveLowerTriAdjointEigen2 {
     static void run(const Int supernode_size,
-             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
-             double * CATAMARI_RESTRICT b) {
-        const double *CATAMARI_RESTRICT L_col_a = L_data + L_leading_dim * (supernode_size - 2);
-        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
-        using V2d = Vec2_T<double>;
-        using  VMap = Eigen::Map<      V2d, Eigen::Aligned16>;
-        using CVMap = Eigen::Map<const V2d, Eigen::Aligned16>;
+             const Field * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             Field * CATAMARI_RESTRICT b) {
+        const Field *CATAMARI_RESTRICT L_col_a = L_data + L_leading_dim * (supernode_size - 2);
+        const Field *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        using Vec2 = Vec2_T<Field>;
+        using  VMap = Eigen::Map<      Vec2, std::is_same<Field, double>::value ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using CVMap = Eigen::Map<const Vec2, std::is_same<Field, double>::value ? Eigen::Aligned16 : Eigen::Unaligned>;
 
         for (Int j = supernode_size - 2; j >= 0; j -= 2) {
-            V2d eta = VMap(b + j);
+            Vec2 eta = VMap(b + j);
 
             for (Int i = j + 2; i < supernode_size; i += 2) {
-                V2d b_strip = CVMap(b + i);
+                Vec2 b_strip = CVMap(b + i);
                 eta[0] -= CVMap(L_col_a + i).dot(b_strip);
                 eta[1] -= CVMap(L_col_b + i).dot(b_strip);
             }
@@ -728,6 +754,13 @@ struct SolveLowerTriAdjoint<double, 2> {
         }
     }
 };
+
+template<>
+struct SolveLowerTriAdjoint<float, 2> : SolveLowerTriAdjointEigen2<float> { };
+
+#ifndef CATAMARI_SOLVE_AVX_KERNELS
+template<>
+struct SolveLowerTriAdjoint<double, 2> : SolveLowerTriAdjointEigen2<double> { };
 #endif
 
 #ifdef CATAMARI_SOLVE_AVX_KERNELS // AVX intrinsics version is faster where available.
@@ -737,24 +770,25 @@ struct SolveLowerTriAdjoint<double, 3> {
              const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
                  double * CATAMARI_RESTRICT b);
 };
-#else
-template<>
-struct SolveLowerTriAdjoint<double, 3> {
+#endif
+
+template<class Field>
+struct SolveLowerTriAdjointEigen3 {
     static void run(const Int supernode_size,
-             const double * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
-             double * CATAMARI_RESTRICT b) {
-        const double *CATAMARI_RESTRICT L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
-        const double *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
-        const double *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
-        using V3d = Vec3_T<double>;
-        using  VMap = Eigen::Map<      V3d>;
-        using CVMap = Eigen::Map<const V3d>;
+             const Field * CATAMARI_RESTRICT L_data, const Int L_leading_dim,
+             Field * CATAMARI_RESTRICT b) {
+        const Field *CATAMARI_RESTRICT L_col_a = L_data  + L_leading_dim * (supernode_size - 3);
+        const Field *CATAMARI_RESTRICT L_col_b = L_col_a + L_leading_dim;
+        const Field *CATAMARI_RESTRICT L_col_c = L_col_b + L_leading_dim;
+        using Vec3 = Vec3_T<Field>;
+        using  VMap = Eigen::Map<      Vec3>;
+        using CVMap = Eigen::Map<const Vec3>;
 
         for (Int j = supernode_size - 3; j >= 0; j -= 3) {
-            V3d eta = VMap(b + j);
+            Vec3 eta = VMap(b + j);
 
             for (Int i = j + 3; i < supernode_size; i += 3) {
-                V3d b_strip = CVMap(b + i);
+                Vec3 b_strip = CVMap(b + i);
                 eta[0] -= CVMap(L_col_a + i).dot(b_strip);
                 eta[1] -= CVMap(L_col_b + i).dot(b_strip);
                 eta[2] -= CVMap(L_col_c + i).dot(b_strip);
@@ -775,6 +809,13 @@ struct SolveLowerTriAdjoint<double, 3> {
         }
     }
 };
+
+template<>
+struct SolveLowerTriAdjoint<float, 3> : SolveLowerTriAdjointEigen3<float> { };
+
+#ifndef CATAMARI_SOLVE_AVX_KERNELS
+template<>
+struct SolveLowerTriAdjoint<double, 3> : SolveLowerTriAdjointEigen3<double> { };
 #endif
 
 }

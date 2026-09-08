@@ -297,8 +297,8 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
       const Field *wrhs_ptr = work_right_hand_sides.Pointer(0, j);
       for (Int i = 0; i < subdiagonal.height; i += BLOCK_SIZE) {
         using Vec = VecN_T<Field, BLOCK_SIZE>; // TODO: evaluate add_strip version with restrict pointer, not using Eigen.
-        using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
-        using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
         VMap(rhs_ptr + indices[i]) -= CVMap(wrhs_ptr + i);
       }
     }
@@ -434,8 +434,8 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
         const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
               Field *       wrhs_ptr = work_right_hand_sides. Pointer(0, j);
         using   Vec = VecN_T<Field, BLOCK_SIZE>; // TODO: evaluate add_strip version with restrict pointer, not using Eigen.
-        using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
-        using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
+        using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
         for (Int i = 0; i < degree; i += BLOCK_SIZE) {
             // (VMap(wrhs_ptr)) = CVMap(rhs_ptr + indices[i]);
             // wrhs_ptr += BLOCK_SIZE;

@@ -472,7 +472,7 @@ class Factorization {
       FillZerosLowerTriangularMiddleCols(diagonal_block.data, local_j, local_j + BlockSize, diagonal_block.leading_dim);
 
       m_inputData.injectEntries(j, j + BlockSize, factor_values_.Data());
-      if (m_inputData.sigma != 0) {
+      if (!m_inputData.Bx && m_inputData.sigma != 0) {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
       }
@@ -482,7 +482,7 @@ class Factorization {
       FillZerosLowerTriangularMiddleCols(diagonal_block.data, jstart, jend, diagonal_block.leading_dim);
 
       m_inputData.injectEntries(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
-      if (m_inputData.sigma != 0) {
+      if (!m_inputData.Bx && m_inputData.sigma != 0) {
           for (Int c = jstart; c < jend; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
@@ -492,7 +492,7 @@ class Factorization {
       FillZerosLowerTriangular(diagonal_block.data, diagonal_block.width, diagonal_block.leading_dim);
 
       m_inputData.injectEntries(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
-      if (m_inputData.sigma != 0) {
+      if (!m_inputData.Bx && m_inputData.sigma != 0) {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
@@ -505,7 +505,7 @@ class Factorization {
       FillZerosLowerTriangularMiddleCols(diagonal_block.data, local_j, local_j + BlockSize, diagonal_block.leading_dim);
 
       m_inputData.template injectEntriesBlockCPlan<BlockSize>(j, j + BlockSize, factor_values_.Data(), diagonal_block.leading_dim);
-      if (m_inputData.sigma != 0) {
+      if (!m_inputData.Bx && m_inputData.sigma != 0) {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
       }
@@ -516,7 +516,7 @@ class Factorization {
       FillZerosLowerTriangularMiddleCols(diagonal_block.data, jstart, jend, diagonal_block.leading_dim);
 
       m_inputData.template injectEntriesBlockCPlan<BlockSize>(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data(), diagonal_block.leading_dim);
-      if (m_inputData.sigma != 0) {
+      if (!m_inputData.Bx && m_inputData.sigma != 0) {
           for (Int c = jstart; c < jend; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
@@ -527,7 +527,7 @@ class Factorization {
       FillZerosLowerTriangular(diagonal_block.data, diagonal_block.width, diagonal_block.leading_dim);
 
       m_inputData.template injectEntriesBlockCPlan<BlockSize>(supernode_offset, supernode_offset + supernode_size, factor_values_.Data(), diagonal_block.leading_dim);
-      if (m_inputData.sigma != 0) {
+      if (!m_inputData.Bx && m_inputData.sigma != 0) {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
@@ -624,11 +624,13 @@ class Factorization {
     result->factor_values_   = factor_values_;
 
     // Point the lower/diagonal factors at the correct data.
-    Int dataPtrOffset = result->factor_values_.Data() - factor_values_.Data();
+    // (Assumes non-legacy interleaved storage.)
+    Field *new_base = result->factor_values_.Data();
+    const Field *old_base = factor_values_.Data();
     const Int ns = ordering_.supernode_sizes.Size();
     for (Int s = 0; s < ns; ++s) {
-        result->   lower_factor_->blocks[s].data += dataPtrOffset;
-        result->diagonal_factor_->blocks[s].data += dataPtrOffset;
+        result->   lower_factor_->blocks[s].data = new_base + (   lower_factor_->blocks[s].data - old_base);
+        result->diagonal_factor_->blocks[s].data = new_base + (diagonal_factor_->blocks[s].data - old_base);
     }
 
     return result;

@@ -3430,8 +3430,8 @@ void InversePermute(const Perm &iperm, const BlasMatrixView<Field> &in, BlasMatr
             Field * CATAMARI_RESTRICT dst = out_ptr + r.begin() * BLOCK_SIZE;
             for (Int i = BLOCK_SIZE * r.begin(); i < end; i += BLOCK_SIZE) {
                 using Vec = Eigen::Matrix<Field, BLOCK_SIZE, 1>;
-                Eigen::Map<Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>{dst}
-                        = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>{in_ptr + iperm[i]};
+                Eigen::Map<Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>{dst}
+                        = Eigen::Map<const Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>{in_ptr + iperm[i]};
                 dst += BLOCK_SIZE;
            }
         };
