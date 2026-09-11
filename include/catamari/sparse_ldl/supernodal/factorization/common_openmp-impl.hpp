@@ -202,8 +202,6 @@ void Factorization<Field>::OpenMPInitializeBlockColumn(
   const Int supernode_start = ordering_.supernode_offsets[supernode];
   const Int supernode_size = ordering_.supernode_sizes[supernode];
   const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
-  const Int* index_beg = lower_factor_->StructureBeg(supernode);
-  const Int* index_end = lower_factor_->StructureEnd(supernode);
 
   #pragma omp parallel for schedule(dynamic)
   for (Int j = supernode_start; j < supernode_start + supernode_size; ++j) {
@@ -233,12 +231,7 @@ void Factorization<Field>::OpenMPInitializeBlockColumn(
       if (row < supernode_start + supernode_size) {
         diag_column_ptr[row - supernode_start] = value;
       } else {
-        const Int* iter = std::lower_bound(index_beg, index_end, row);
-        CATAMARI_ASSERT(iter != index_end, "Exceeded row indices.");
-        CATAMARI_ASSERT(*iter == row, "Entry (" + std::to_string(row) + ", " +
-                                          std::to_string(j) +
-                                          ") wasn't in the structure.");
-        const Int rel_row = std::distance(index_beg, iter);
+        const Int rel_row = lower_factor_->FindScalarRow(supernode, row);
         lower_column_ptr[rel_row] = value;
       }
     }

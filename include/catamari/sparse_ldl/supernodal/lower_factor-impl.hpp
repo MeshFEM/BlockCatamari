@@ -16,7 +16,9 @@ namespace supernodal_ldl {
 template <class Field>
 LowerFactor<Field>::LowerFactor(const Buffer<Int>& supernode_sizes,
                                 const Buffer<Int>& supernode_degrees,
-                                BlasMatrixView<Field> storage) {
+                                BlasMatrixView<Field> storage, Int index_block_size)
+    : index_block_size_(index_block_size) {
+  if (index_block_size < 1) throw std::invalid_argument("Invalid index block size");
   const Int num_supernodes = supernode_sizes.Size();
 
   Int degree_sum = 0;
@@ -34,7 +36,9 @@ LowerFactor<Field>::LowerFactor(const Buffer<Int>& supernode_sizes,
     blocks[supernode].leading_dim = degree;
     blocks[supernode].data = storage.Data() ? storage.Data() + num_entries : nullptr;
 
-    degree_sum += degree;
+    if (degree % index_block_size || supernode_size % index_block_size)
+      throw std::invalid_argument("Incomplete index block");
+    degree_sum += degree / index_block_size;
     num_entries += degree * supernode_size;
   }
 
@@ -50,27 +54,28 @@ LowerFactor<Field>::LowerFactor(const Buffer<Int>& supernode_sizes,
   }
 
   structure_index_offsets_[num_supernodes] = degree_sum;
-  structure_indices_.Resize(degree_sum);
+  // Keep a valid base pointer even for an all-diagonal/empty factor.
+  structure_indices_.Resize(std::max<Int>(1, degree_sum));
 }
 
 template <class Field>
 Int* LowerFactor<Field>::StructureBeg(Int supernode) {
-  return &structure_indices_[structure_index_offsets_[supernode]];
+  return structure_indices_.Data() + structure_index_offsets_[supernode];
 }
 
 template <class Field>
 const Int* LowerFactor<Field>::StructureBeg(Int supernode) const {
-  return &structure_indices_[structure_index_offsets_[supernode]];
+  return structure_indices_.Data() + structure_index_offsets_[supernode];
 }
 
 template <class Field>
 Int* LowerFactor<Field>::StructureEnd(Int supernode) {
-  return &structure_indices_[structure_index_offsets_[supernode + 1]];
+  return structure_indices_.Data() + structure_index_offsets_[supernode + 1];
 }
 
 template <class Field>
 const Int* LowerFactor<Field>::StructureEnd(Int supernode) const {
-  return &structure_indices_[structure_index_offsets_[supernode + 1]];
+  return structure_indices_.Data() + structure_index_offsets_[supernode + 1];
 }
 
 template <class Field>
@@ -141,7 +146,7 @@ void LowerFactor<Field>::FillIntersectionSizes(
         last_supernode = row_supernode;
         intersect_size = 0;
       }
-      ++intersect_size;
+      intersect_size += index_block_size_;
     }
     if (last_supernode != -1) {
       // Close out the last intersection count for this column supernode.

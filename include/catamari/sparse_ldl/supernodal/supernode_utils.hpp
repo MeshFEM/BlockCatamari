@@ -153,14 +153,23 @@ struct FineGrainedTimersFactorize {
 
 struct FineGrainedTimersSolve {
   // Fine-grained timers accumulated per-supernode (threadsafe) for the solve phase.
-  enum Type { MergeChildContributions = 0,  SolveDiag, MultiplySubdiagonal, OutOfPlaceBacksubUpdate, InPlaceBacksubUpdate, OutOfPlaceForwardsubUpdate, InPlaceForwardsubUpdate, NumTimers };
+  enum Type { MergeChildContributions = 0, ForwardSolveDiag, BackwardSolveDiag, FusedForward, InitializeSchur, MultiplySubdiagonal, OutOfPlaceBacksubUpdate, InPlaceBacksubUpdate, OutOfPlaceForwardsubUpdate, InPlaceForwardsubUpdate, ForwardNode, BackwardNode, ForwardPhase, BackwardPhase, SolvePhase, FusedBackward, NumTimers };
   std::array<Buffer<quotient::Timer>, NumTimers> finegrained_timers;
   Buffer<Int> assigned_thread;
 
   static std::string nameForType(Type type) {
     switch (type) {
       case MergeChildContributions: return "MergeChildContributions";
-      case SolveDiag:               return "SolveDiag";
+      case ForwardSolveDiag: return "ForwardSolveDiag";
+      case BackwardSolveDiag: return "BackwardSolveDiag";
+      case FusedForward: return "FusedForward";
+      case FusedBackward: return "FusedBackward";
+      case InitializeSchur: return "InitializeSchur";
+      case ForwardNode: return "ForwardNode";
+      case BackwardNode: return "BackwardNode";
+      case ForwardPhase: return "ForwardPhase";
+      case BackwardPhase: return "BackwardPhase";
+      case SolvePhase: return "SolvePhase";
       case MultiplySubdiagonal:     return "MultiplySubdiagonal";
       case OutOfPlaceBacksubUpdate: return "OutOfPlaceBacksubUpdate";
       case InPlaceBacksubUpdate:    return "InPlaceBacksubUpdate";

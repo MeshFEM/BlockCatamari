@@ -193,17 +193,7 @@ void OpenMPFillNonzerosRecursion(const CoordinateMatrix<Field>& matrix,
       }
 
       // Insert the value into the subdiagonal block.
-      const Int* column_index_beg =
-          lower_factor->StructureBeg(column_supernode);
-      const Int* column_index_end =
-          lower_factor->StructureEnd(column_supernode);
-      const Int* iter =
-          std::lower_bound(column_index_beg, column_index_end, row);
-      CATAMARI_ASSERT(iter != column_index_end, "Exceeded column indices.");
-      CATAMARI_ASSERT(*iter == row, "Entry (" + std::to_string(row) + ", " +
-                                        std::to_string(column) +
-                                        ") wasn't in the structure.");
-      const Int rel_row = std::distance(column_index_beg, iter);
+      const Int rel_row = lower_factor->FindScalarRow(column_supernode, row);
       const Int rel_column =
           column - ordering.supernode_offsets[column_supernode];
       lower_factor->blocks[column_supernode](rel_row, rel_column) = entry.value;
@@ -335,11 +325,11 @@ void OpenMPMergeChildSchurComplements(
 
   const Int supernode_size = ordering.supernode_sizes[supernode];
   const Int supernode_start = ordering.supernode_offsets[supernode];
-  const Int* main_indices = lower_factor->StructureBeg(supernode);
+  const auto main_indices = lower_factor->ScalarStructureBeg(supernode);
   for (Int child_index = 0; child_index < num_children; ++child_index) {
     const Int child =
         ordering.assembly_forest.children[child_beg + child_index];
-    const Int* child_indices = lower_factor->StructureBeg(child);
+    const auto child_indices = lower_factor->ScalarStructureBeg(child);
     Buffer<Field>& child_schur_complement_buffer =
         shared_state->schur_complement_buffers[child];
     BlasMatrixView<Field> child_schur_complement =
@@ -366,7 +356,7 @@ void OpenMPMergeChildSchurComplements(
         }
       }
     }
-    const Int* child_rel_indices_ptr = child_rel_indices.Data();
+    const auto child_rel_indices_ptr = child_rel_indices.Data();
 
     // Add the child Schur complement into this supernode's front.
     #pragma omp taskgroup

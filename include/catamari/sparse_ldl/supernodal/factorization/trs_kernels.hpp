@@ -36,6 +36,14 @@ template<class Field>        using Mat2_T = MatN_T<Field, 2>;
 // (of shape `degree x size`).
 // Here, `start := supernode_start` and `end := start + supernode_size`.
 ////////////////////////////////////////////////////////////////////////////////
+// The row-index arrays below store one scalar base per BLOCK_SIZE rows.
+// All factor dimensions remain scalar. Component reconstruction is only needed
+// by scalar/unrolled loops; block-aligned loops index the compact arrays directly.
+template<Int BLOCK_SIZE>
+inline Int ScalarBlockRow(const Int *bases, Int i) {
+    return bases[i / BLOCK_SIZE] + i % BLOCK_SIZE;
+}
+
 template<class Field, Int BLOCK_SIZE>
 struct MultiplyLowerBlockAdjoint { // `catamari_legacy` implementation
     static void run(const bool conjugate,
@@ -46,7 +54,7 @@ struct MultiplyLowerBlockAdjoint { // `catamari_legacy` implementation
         for (Int k = 0; k < supernode_size; ++k) {
             for (Int i = 0; i < degree; ++i) {
                 Field a = conjugate ? Conjugate(a_col[i]) : a_col[i];
-                const Int row = I[i];
+                const Int row = ScalarBlockRow<BLOCK_SIZE>(I, i);
                 Field *b_col = B_data;
                 for (Int j = 0; j < num_rhs; ++j) {
                     b_col[k + supernode_start] -= a * b_col[row];
@@ -94,6 +102,7 @@ struct MultiplyLowerBlockAdjointEigenUnchunked {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
              const double * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
              const Int num_rhs, double * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const Int block_degree = degree / BLOCK_SIZE;
         const double * CATAMARI_RESTRICT  rhs_ptr = B_data;
               double * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
@@ -101,9 +110,9 @@ struct MultiplyLowerBlockAdjointEigenUnchunked {
             for (Int k = 0; k < supernode_size; ++k) {
                 const double * CATAMARI_RESTRICT a_ptr = A_data + k * A_leading_dim;
                 double val = 0;
-                for (Int i = 0; i < degree; i += BLOCK_SIZE) {
+                for (Int bi = 0; bi < block_degree; ++bi) {
                     using VecBlock = VecN_T<double, BLOCK_SIZE>;
-                    VecBlock rhs_strip = Eigen::Map<const VecBlock>(rhs_ptr + I[i]);
+                    VecBlock rhs_strip = Eigen::Map<const VecBlock>(rhs_ptr + I[bi]);
                     val += Eigen::Map<const VecBlock>(a_ptr).dot(rhs_strip);
                     a_ptr += BLOCK_SIZE;
                 }
@@ -143,6 +152,7 @@ struct MultiplyLowerBlockAdjointEigenChunked {
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
              const Field * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
              const Int num_rhs, Field * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const Int block_degree = degree / BLOCK_SIZE;
         const Field * CATAMARI_RESTRICT  rhs_ptr = B_data;
               Field * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
@@ -163,27 +173,25 @@ struct MultiplyLowerBlockAdjointEigenChunked {
             Int k;
             for (k = 0; k <= supernode_size - CHUNK_SIZE; k += CHUNK_SIZE) {
                 Vec val = Vec::Zero();
-                for (Int i = 0; i < degree; i += BLOCK_SIZE) {
-                    // for (int c = 0; c < BLOCK_SIZE; ++c)
-                    //     assert(I[i + c] == I[i] + c);
-                    val += BMap(A_data + i + k * A_leading_dim, BLOCK_SIZE, CHUNK_SIZE, Stride(A_leading_dim)).transpose()
-                        * Eigen::Map<const VecBlock>(rhs_ptr + I[i]);
+                for (Int bi = 0; bi < block_degree; ++bi) {
+                    val += BMap(A_data + BLOCK_SIZE * bi + k * A_leading_dim, BLOCK_SIZE, CHUNK_SIZE, Stride(A_leading_dim)).transpose()
+                        * Eigen::Map<const VecBlock>(rhs_ptr + I[bi]);
                 }
                 Eigen::Map<Vec>(srhs_ptr + k) -= val;
             }
 #if 1
             for (; k < supernode_size; ++k) {
                 Field val = 0;
-                for (Int i = 0; i < degree; i += BLOCK_SIZE)
-                    val += Eigen::Map<const VecBlock>(A_data + i + k * A_leading_dim).dot(Eigen::Map<const VecBlock>(rhs_ptr + I[i]));
+                for (Int bi = 0; bi < block_degree; ++bi)
+                    val += Eigen::Map<const VecBlock>(A_data + BLOCK_SIZE * bi + k * A_leading_dim).dot(Eigen::Map<const VecBlock>(rhs_ptr + I[bi]));
                 srhs_ptr[k] -= val;
             }
 #else
             const Int k_start = k;
             const Field * CATAMARI_RESTRICT a_ptr_start = A_data + k_start * A_leading_dim;
-            for (Int i = 0; i < degree; i += BLOCK_SIZE) {
-                VecBlock b_entries = Eigen::Map<const VecBlock>(rhs_ptr + I[i]);
-                const Field * CATAMARI_RESTRICT a_ptr = a_ptr_start + i;
+            for (Int bi = 0; bi < block_degree; ++bi) {
+                VecBlock b_entries = Eigen::Map<const VecBlock>(rhs_ptr + I[bi]);
+                const Field * CATAMARI_RESTRICT a_ptr = a_ptr_start + BLOCK_SIZE * bi;
                 for (k = k_start; k < supernode_size; ++k) {
                     srhs_ptr[k] -= Eigen::Map<const VecBlock>(a_ptr).dot(b_entries);
                     a_ptr += A_leading_dim;
@@ -212,12 +220,12 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunk
               const double * CATAMARI_RESTRICT a_row = A_data + i;
 
               Vec rhs_strip;
-              rhs_strip[0] = rhs_ptr[I[i + 0]];
-              rhs_strip[1] = rhs_ptr[I[i + 1]];
-              rhs_strip[2] = rhs_ptr[I[i + 2]];
-              rhs_strip[3] = rhs_ptr[I[i + 3]];
-              rhs_strip[4] = rhs_ptr[I[i + 4]];
-              rhs_strip[5] = rhs_ptr[I[i + 5]];
+              rhs_strip[0] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 0)];
+              rhs_strip[1] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 1)];
+              rhs_strip[2] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 2)];
+              rhs_strip[3] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 3)];
+              rhs_strip[4] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 4)];
+              rhs_strip[5] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 5)];
 
               if constexpr (BLOCK_SIZE == 1) {
                   for (Int k = 0; k < supernode_size; ++k) {
@@ -239,7 +247,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunk
               for (; i < degree; i += BLOCK_SIZE) {
                   const double * CATAMARI_RESTRICT a_row = A_data + i;
                   using VBlock = VecN_T<double, BLOCK_SIZE>;
-                  VBlock rhs_strip = Eigen::Map<const VBlock>(rhs_ptr + I[i]);
+                  VBlock rhs_strip = Eigen::Map<const VBlock>(rhs_ptr + ScalarBlockRow<BLOCK_SIZE>(I, i));
                   using MMap = Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, BLOCK_SIZE>, 0, Eigen::OuterStride<>>;
                   for (Int k = 0; k < supernode_size; k += BLOCK_SIZE) {
                       Eigen::Map<VBlock>(srhs_ptr + k) -= MMap(a_row, BLOCK_SIZE, BLOCK_SIZE, Eigen::OuterStride<>(A_leading_dim)).transpose() * rhs_strip;
@@ -251,7 +259,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedAlternate { // Transposed loop/chunk
           else {
               for (; i < degree; ++i) {
                   const double * CATAMARI_RESTRICT a_row = A_data + i;
-                  const double rhs_val = rhs_ptr[I[i]];
+                  const double rhs_val = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i)];
                   for (Int k = 0; k < supernode_size; ++k) {
                       srhs_ptr[k] -= (*a_row) * rhs_val;
                       a_row += A_leading_dim;
@@ -279,12 +287,12 @@ struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chun
           Int i;
           for (i = 0; i <= degree - CHUNK_SIZE; i += CHUNK_SIZE) {
               Vec rhs_strip;
-              rhs_strip[0] = rhs_ptr[I[i + 0]];
-              rhs_strip[1] = rhs_ptr[I[i + 1]];
-              rhs_strip[2] = rhs_ptr[I[i + 2]];
-              rhs_strip[3] = rhs_ptr[I[i + 3]];
-              // rhs_strip[4] = rhs_ptr[I[i + 4]];
-              // rhs_strip[5] = rhs_ptr[I[i + 5]];
+              rhs_strip[0] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 0)];
+              rhs_strip[1] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 1)];
+              rhs_strip[2] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 2)];
+              rhs_strip[3] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 3)];
+              // rhs_strip[4] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 4)];
+              // rhs_strip[5] = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i + 5)];
 
               const double * CATAMARI_RESTRICT a_row = A_data + i;
               Int k = 0;
@@ -309,7 +317,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chun
               for (; i < degree; i += BLOCK_SIZE) {
                   const double * CATAMARI_RESTRICT a_row = A_data + i;
                   using VBlock = VecN_T<double, BLOCK_SIZE>;
-                  VBlock rhs_strip = Eigen::Map<const VBlock>(rhs_ptr + I[i]);
+                  VBlock rhs_strip = Eigen::Map<const VBlock>(rhs_ptr + ScalarBlockRow<BLOCK_SIZE>(I, i));
                   using MMap = Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, BLOCK_SIZE>, 0, Eigen::OuterStride<>>;
                   for (Int k = 0; k < supernode_size; k += BLOCK_SIZE) {
                       Eigen::Map<VBlock>(srhs_ptr + k) -= MMap(a_row, BLOCK_SIZE, BLOCK_SIZE, Eigen::OuterStride<>(A_leading_dim)).transpose() * rhs_strip;
@@ -320,7 +328,7 @@ struct MultiplyLowerBlockAdjointEigenChunkedOuterInner { // Transposed loop/chun
           else {
               for (; i < degree; ++i) {
                   const double * CATAMARI_RESTRICT a_row = A_data + i;
-                  const double rhs_val = rhs_ptr[I[i]];
+                  const double rhs_val = rhs_ptr[ScalarBlockRow<BLOCK_SIZE>(I, i)];
                   for (Int k = 0; k < supernode_size; ++k) {
                       srhs_ptr[k] -= (*a_row) * rhs_val;
                       a_row += A_leading_dim;
@@ -345,7 +353,7 @@ struct MultiplyLowerBlockAdjointSmall { // Optimized kernel for double
             double * CATAMARI_RESTRICT b_col_supernode = b_col + supernode_start;
             for (Int i = 0; i < degree; ++i) {
                 const double * CATAMARI_RESTRICT a_ptr = A_data + i;
-                const double b_entry = b_col[I[i]];
+                const double b_entry = b_col[ScalarBlockRow<BLOCK_SIZE>(I, i)];
                 for (Int k = 0; k < supernode_size; ++k) {
                     b_col_supernode[k] -= (*a_ptr) * b_entry;
                     a_ptr += A_leading_dim;
@@ -369,14 +377,14 @@ struct MultiplyLowerBlockAdjointSmall<2> {
             Eigen::Map<Eigen::VectorXd> b_map(b_col_supernode, supernode_size);
             for (Int i = 0; i < degree; i += 2) {
                 const double * CATAMARI_RESTRICT a_ptr = A_data + i;
-                const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i]);
+                const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i / 2]);
                 Eigen::Map<const Eigen::Matrix<double, 2, Eigen::Dynamic>, 0, Eigen::OuterStride<>> A_map(a_ptr, 2, supernode_size, Eigen::OuterStride<>(A_leading_dim));
                 b_map -= A_map.transpose() * b_strip;
             }
 #else
             for (Int i = 0; i < degree; i += 2) {
                 const double * CATAMARI_RESTRICT a_ptr = A_data + i;
-                const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i]);
+                const Vec2_T<double> b_strip = Eigen::Map<const Vec2_T<double>>(b_col + I[i / 2]);
 
                 for (Int k = 0; k < supernode_size; k += 2) {
                     Mat2_T<double> A_block;
@@ -413,7 +421,7 @@ struct MultiplyLowerBlock { // `catamari_legacy` implementation
                 const Field eta = b_col[k + supernode_start];
                 const Field *A_col = A_data + k * A_leading_dim;
                 for (Int i = 0; i < degree; ++i)
-                    b_col[I[i]] -= A_col[i] * eta;
+                    b_col[ScalarBlockRow<BLOCK_SIZE>(I, i)] -= A_col[i] * eta;
             }
             b_col += B_leading_dim;
         }
@@ -434,6 +442,7 @@ struct MultiplyLowerBlockEigen { // Shared Eigen kernel for float/double
     static void run(const Int *I, const Int supernode_start, const Int supernode_size, const Int degree,
              const Field * CATAMARI_RESTRICT A_data, const Int A_leading_dim,
              const Int num_rhs, Field * CATAMARI_RESTRICT B_data, const Int B_leading_dim) {
+        const Int block_degree = degree / BLOCK_SIZE;
               Field * CATAMARI_RESTRICT  rhs_ptr = B_data;
         const Field * CATAMARI_RESTRICT srhs_ptr = B_data + supernode_start;
 
@@ -441,9 +450,11 @@ struct MultiplyLowerBlockEigen { // Shared Eigen kernel for float/double
 #if 1
           constexpr Int CHUNK_SIZE = 6;
           using Vec = VecN_T<Field, CHUNK_SIZE>;
-          Int i;
-          for (i = 0; i <= degree - CHUNK_SIZE; i += CHUNK_SIZE) {
-              const Field * CATAMARI_RESTRICT a_row = A_data + i;
+          static_assert(CHUNK_SIZE % BLOCK_SIZE == 0, "Incomplete index block");
+          constexpr Int CHUNK_BLOCKS = CHUNK_SIZE / BLOCK_SIZE;
+          Int bi = 0;
+          for (; bi <= block_degree - CHUNK_BLOCKS; bi += CHUNK_BLOCKS) {
+              const Field * CATAMARI_RESTRICT a_row = A_data + BLOCK_SIZE * bi;
 
               Vec val;
               if constexpr (BLOCK_SIZE == 1) {
@@ -463,15 +474,18 @@ struct MultiplyLowerBlockEigen { // Shared Eigen kernel for float/double
                   }
               }
 
-              rhs_ptr[I[i + 0]] -= val[0];
-              rhs_ptr[I[i + 1]] -= val[1];
-              rhs_ptr[I[i + 2]] -= val[2];
-              rhs_ptr[I[i + 3]] -= val[3];
-              rhs_ptr[I[i + 4]] -= val[4];
-              rhs_ptr[I[i + 5]] -= val[5];
+              // CHUNK_SIZE is divisible by every supported block size.
+              // Load each compact base once, then address its components directly.
+              for (Int ib = 0; ib < CHUNK_BLOCKS; ++ib) {
+                  Field *dst = rhs_ptr + I[bi + ib];
+                  for (Int c = 0; c < BLOCK_SIZE; ++c)
+                      dst[c] -= val[ib * BLOCK_SIZE + c];
+              }
           }
-          for (; i < degree; ++i) {
-              const Field * CATAMARI_RESTRICT a_row = A_data + i;
+          for (; bi < block_degree; ++bi) {
+            Field *dst = rhs_ptr + I[bi];
+            for (Int c = 0; c < BLOCK_SIZE; ++c) {
+              const Field * CATAMARI_RESTRICT a_row = A_data + BLOCK_SIZE * bi + c;
               Field val;
               if constexpr (BLOCK_SIZE == 1) {
                   val = (*a_row) * srhs_ptr[0];
@@ -489,7 +503,8 @@ struct MultiplyLowerBlockEigen { // Shared Eigen kernel for float/double
                       val += MMap(a_row, 1, BLOCK_SIZE, Eigen::InnerStride<>(A_leading_dim)).transpose().dot(CVMap(srhs_ptr + k));
                   }
               }
-              rhs_ptr[I[i]] -= val;
+              dst[c] -= val;
+            }
           }
 #else
           using Vec = VecN_T<Field, BLOCK_SIZE>;
@@ -497,17 +512,17 @@ struct MultiplyLowerBlockEigen { // Shared Eigen kernel for float/double
           using Stride = std::conditional_t<BLOCK_SIZE == 1, Eigen::InnerStride<>, Eigen::OuterStride<>>;
           using CVMap = Eigen::Map<const Vec>;
           using MMap = Eigen::Map<const Mat, 0, Stride>;
-          for (Int i = 0; i < degree; i += BLOCK_SIZE) {
-             // Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, Eigen::Dynamic>, 0, Stride> A_block(A_data + i, BLOCK_SIZE, supernode_size, Stride(A_leading_dim));
-             // Eigen::Map<Vec>(rhs_ptr + I[i]) -= A_block * Eigen::Map<const Eigen::VectorXd>(srhs_ptr, supernode_size);
+          for (Int bi = 0; bi < block_degree; ++bi) {
+             // Eigen::Map<const Eigen::Matrix<double, BLOCK_SIZE, Eigen::Dynamic>, 0, Stride> A_block(A_data + BLOCK_SIZE * bi, BLOCK_SIZE, supernode_size, Stride(A_leading_dim));
+             // Eigen::Map<Vec>(rhs_ptr + I[bi]) -= A_block * Eigen::Map<const Eigen::VectorXd>(srhs_ptr, supernode_size);
 
-             const Field * CATAMARI_RESTRICT a_row = A_data + i;
+             const Field * CATAMARI_RESTRICT a_row = A_data + BLOCK_SIZE * bi;
              Vec val = MMap(a_row, BLOCK_SIZE, BLOCK_SIZE, Stride(A_leading_dim)) * CVMap(srhs_ptr);
              for (Int k = BLOCK_SIZE; k < supernode_size; k += BLOCK_SIZE) {
                  a_row += BLOCK_SIZE * A_leading_dim;
                  val += MMap(a_row, BLOCK_SIZE, BLOCK_SIZE, Stride(A_leading_dim)) * CVMap(srhs_ptr + k);
              }
-             Eigen::Map<Vec>(rhs_ptr + I[i]) -= val;
+             Eigen::Map<Vec>(rhs_ptr + I[bi]) -= val;
           }
 #endif
           rhs_ptr += B_leading_dim;

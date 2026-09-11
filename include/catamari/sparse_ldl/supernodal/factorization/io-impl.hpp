@@ -54,7 +54,7 @@ void Factorization<Field>::PrintLowerFactor(const std::string& label,
   const Int num_supernodes = ordering_.supernode_sizes.Size();
   for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
     const Int supernode_start = ordering_.supernode_offsets[supernode];
-    const Int* indices = lower_factor_->StructureBeg(supernode);
+    const auto indices = lower_factor_->ScalarStructureBeg(supernode);
 
     const ConstBlasMatrixView<Field>& diag_matrix =
         diagonal_factor_->blocks[supernode];

@@ -21,6 +21,7 @@
 #include <MeshFEMCore/Parallelism.hh>
 
 #include "trs_kernels.hpp"
+#include "solve_kernels.hpp"
 
 // Avoid repeated memory allocation/deallocation when applying permutations
 // (at the cost of `right_hand_sides` worth of memory).
@@ -40,9 +41,126 @@
 namespace catamari {
 namespace supernodal_ldl {
 
+// Accumulate each serial scheduling subtree into its owned RHS and a private
+// root boundary. Cache only external maps; internal rows use native block indices.
+template <class Field>
+void Factorization<Field>::PrepareSolveAccumulationCache() const {
+  const Int count = ordering_.supernode_sizes.Size();
+  if (solve_accumulation_ready_) return;
+  // BENCHMARK_SCOPED_TIMER_SECTION timer("CacheSolveAccumulation");
+  // A failed allocation/construction may be retried; publish readiness last.
+  solve_accumulation_groups_.clear();
+  solve_accumulation_external_.clear();
+  solve_accumulation_group_for_root_.Resize(count);
+  std::fill(solve_accumulation_group_for_root_.begin(), solve_accumulation_group_for_root_.end(), Int(-1));
+  solve_accumulation_owned_.Resize(count);
+  solve_accumulation_offsets_.Resize(count);
+  const auto &af = ordering_.assembly_forest;
+  const Int bs = lower_factor_->IndexBlockSize();
+  struct Pending { Int node; int depth; };
+  std::vector<Pending> pending;
+  for (Int r : af.roots) pending.push_back({r, 0});
+  while (!pending.empty()) {
+    const auto item = pending.back(); pending.pop_back();
+    const Int root = item.node;
+    if (work_estimates_[root] < solve_kernels::forward_work || item.depth > solve_kernels::forward_max_depth) {
+      solve_accumulation_group_for_root_[root] = solve_accumulation_groups_.size();
+      solve_accumulation_groups_.push_back({root, {}});
+    } else {
+      for (Int ci = af.child_offsets[root]; ci < af.child_offsets[root + 1]; ++ci)
+        pending.push_back({af.children[ci], item.depth + 1});
+    }
+  }
+  {
+    const Int num_groups = solve_accumulation_groups_.size();
+    std::vector<Int> group_counts(num_groups), group_offsets(num_groups), max_degrees(num_groups);
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("AccumulationCountRows");
+      tbb::parallel_for(Int(0), num_groups, [&](Int g) {
+        const Int root = solve_accumulation_groups_[g].root;
+        const Int end = ordering_.supernode_offsets[root] + ordering_.supernode_sizes[root];
+        const bool empty_boundary = lower_factor_->blocks[root].height == 0;
+        Int entries = 0, max_degree = 0;
+        for (Int i = solve_subtree_begin_[root]; i < solve_subtree_end_[root]; ++i) {
+          const Int s = solve_postorder_[i];
+          const Int blocks = lower_factor_->blocks[s].height / bs;
+          Int owned;
+          if (empty_boundary) owned = blocks;
+          else if (s == root) owned = 0;
+          else if (!blocks) owned = 0;
+          else {
+            const Int *beg = lower_factor_->StructureBeg(s);
+            if (beg[blocks - 1] < end) owned = blocks;
+            else owned = std::lower_bound(beg, beg + blocks, end) - beg;
+          }
+          solve_accumulation_owned_[s] = owned;
+          solve_accumulation_offsets_[s] = entries; // Relative to this group's packed slice.
+          entries += blocks - owned;
+          max_degree = std::max(max_degree, lower_factor_->blocks[s].height);
+        }
+        group_counts[g] = entries;
+        max_degrees[g] = max_degree;
+      });
+    }
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("AccumulationAllocate");
+      Int entries = 0;
+      for (Int g = 0; g < num_groups; ++g) {
+        group_offsets[g] = entries;
+        entries += group_counts[g];
+      }
+      solve_accumulation_external_.resize(entries);
+    }
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("AccumulationFillMaps");
+      tbb::parallel_for(Int(0), num_groups, [&](Int g) {
+        auto &group = solve_accumulation_groups_[g];
+        const Int root = group.root;
+        const Int *boundary_beg = lower_factor_->StructureBeg(root), *boundary_end = lower_factor_->StructureEnd(root);
+        for (Int i = solve_subtree_begin_[root]; i < solve_subtree_end_[root]; ++i) {
+          const Int s = solve_postorder_[i];
+          Int &offset = solve_accumulation_offsets_[s];
+          offset += group_offsets[g];
+          const Int owned = solve_accumulation_owned_[s];
+          const Int length = lower_factor_->blocks[s].height / bs - owned;
+          if (!length) continue;
+          const Int *external = lower_factor_->StructureBeg(s) + owned;
+          Int *out = solve_accumulation_external_.data() + offset;
+          if (s == root) {
+            for (Int j = 0; j < length; ++j) out[j] = bs * j;
+            continue;
+          }
+          const Int *cursor = boundary_beg;
+          for (Int j = 0; j < length; ++j) {
+            const Int *q;
+            if (j > 0) {
+              // Sorted lists: advance only between the first and last match.
+              while (cursor != boundary_end && *cursor < external[j]) ++cursor;
+              q = cursor;
+            } else {
+              q = std::lower_bound(cursor, boundary_end, external[j]);
+            }
+            if (q == boundary_end || *q != external[j])
+              throw std::logic_error("Invalid accumulation boundary map");
+            out[j] = bs * (q - boundary_beg);
+            cursor = q + 1;
+          }
+        }
+        // Each group owns its scratch allocation; no shared vector grows here.
+        group.scratch.resize(max_degrees[g]);
+      });
+    }
+  }
+  solve_accumulation_ready_ = true;
+}
+
 template <class Field>
 void Factorization<Field>::Solve(
     BlasMatrixView<Field>* right_hand_sides, Int block_size, bool already_permuted) const {
+  if (block_size != lower_factor_->IndexBlockSize())
+    throw std::runtime_error("Solve kernel block size must match index block size");
+  if (solve_profile_.enabled) ++solve_profile_.solve;
+  SolveProfile::Scope solve_profile_scope(solve_profile_, -1, FineGrainedTimersSolve::SolvePhase);
   const bool needs_permutation = !(ordering_.permutation.Empty() || already_permuted);
   // Reorder the input into the permutation of the factorization.
 
@@ -70,6 +188,31 @@ void Factorization<Field>::Solve(
 
   const Int max_threads = get_max_num_tbb_threads();
   if (max_threads > 1) {
+    if (solve_postorder_.Size() != num_supernodes) {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("CacheSolveTraversal");
+      solve_postorder_.Resize(num_supernodes);
+      solve_subtree_begin_.Resize(num_supernodes);
+      solve_subtree_end_.Resize(num_supernodes);
+      const auto &af = ordering_.assembly_forest;
+      std::vector<Int> pending(af.roots.begin(), af.roots.end());
+      Int next = num_supernodes;
+      while (!pending.empty()) {
+        const Int s = pending.back();
+        pending.pop_back();
+        solve_postorder_[--next] = s;
+        for (Int ci = af.child_offsets[s]; ci < af.child_offsets[s + 1]; ++ci)
+          pending.push_back(af.children[ci]);
+      }
+      assert(next == 0);
+      for (Int i = 0; i < num_supernodes; ++i) {
+        const Int s = solve_postorder_[i];
+        Int begin = i;
+        for (Int ci = af.child_offsets[s]; ci < af.child_offsets[s + 1]; ++ci)
+          begin = std::min(begin, solve_subtree_begin_[af.children[ci]]);
+        solve_subtree_begin_[s] = begin;
+        solve_subtree_end_[s] = i + 1;
+      }
+    }
     // Avoid thread oversubscription (in case we're not linked against sequential BLAS)
     BlasSingleThreadingObserver blas_single_threading_observer;
 
@@ -169,6 +312,12 @@ void Factorization<Field>::Solve(
             total_work += work_estimates[root];
     }
 
+#if !SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
+    if (right_hand_sides->width == 1 && !control_.supernodal_pivoting &&
+        control_.factorization_type == kCholeskyFactorization)
+      PrepareSolveAccumulationCache();
+#endif
+
     {
         if (block_size == 3) {
             OpenMPLowerTriangularSolve<3>(&permuted_right_hand_sides, &shared_state);
@@ -221,6 +370,7 @@ template<Int BLOCK_SIZE>
 void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     Buffer<Field>* workspace) const {
+  SolveProfile::Scope node_profile(solve_profile_, supernode, FineGrainedTimersSolve::ForwardNode);
   // Eliminate this supernode.
   const Int num_rhs = right_hand_sides->width;
   const bool is_cholesky =
@@ -232,7 +382,7 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   BlasMatrixView<Field> right_hand_sides_supernode =
       right_hand_sides->Submatrix(supernode_start, 0, supernode_size, num_rhs);
 
-  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+  SOLVE_START_TIMER(supernode, ForwardSolveDiag);
 
   // Solve against the diagonal block of the supernode.
   if (control_.supernodal_pivoting) {
@@ -244,22 +394,17 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
     if (right_hand_sides_supernode.width > 1)
         LeftLowerTriangularSolves(diag_block, &right_hand_sides_supernode);
     else {
-#if 1
         if (supernode_size < 24)
           trs_kernels::SolveLowerTri<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
         else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
-#else
-        TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
-#endif
     }
   } else {
     LeftLowerUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
   }
 
-  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+  SOLVE_STOP_TIMER(supernode, ForwardSolveDiag);
 
-  const ConstBlasMatrixView<Field> subdiagonal =
-      lower_factor_->blocks[supernode];
+  const ConstBlasMatrixView<Field> subdiagonal = lower_factor_->blocks[supernode].ToConst();
   if (!subdiagonal.height) {
     return;
   }
@@ -274,7 +419,7 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
   const bool out_of_place = supernode_size >= control_.forward_solve_out_of_place_supernode_threshold;
 
   if (out_of_place) {
-    FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
+    SOLVE_START_TIMER(supernode, OutOfPlaceForwardsubUpdate);
     // Perform an out-of-place GEMM.
     BlasMatrixView<Field> work_right_hand_sides;
     work_right_hand_sides.height = subdiagonal.height;
@@ -284,7 +429,7 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
 
 #if 1
     // Store the updates in the workspace.
-    MatrixMultiplyNormalNormal(Field{1}, subdiagonal,
+    solve_kernels::multiply<BLOCK_SIZE>(false, Field{1}, subdiagonal,
                                right_hand_sides_supernode.ToConst(), Field{0},
                                &work_right_hand_sides);
 #else
@@ -299,17 +444,17 @@ void Factorization<Field>::LowerSupernodalTrapezoidalSolve(
         using Vec = VecN_T<Field, BLOCK_SIZE>; // TODO: evaluate add_strip version with restrict pointer, not using Eigen.
         using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
         using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
-        VMap(rhs_ptr + indices[i]) -= CVMap(wrhs_ptr + i);
+        VMap(rhs_ptr + indices[i / BLOCK_SIZE]) -= CVMap(wrhs_ptr + i);
       }
     }
-    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceForwardsubUpdate);
+    SOLVE_STOP_TIMER(supernode, OutOfPlaceForwardsubUpdate);
   } else {
-    FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceForwardsubUpdate);
+    SOLVE_START_TIMER(supernode, InPlaceForwardsubUpdate);
     trs_kernels::MultiplyLowerBlock<Field, BLOCK_SIZE>::run(
         indices, supernode_start, supernode_size, subdiagonal.height,
         subdiagonal.data, subdiagonal.leading_dim, num_rhs,
         right_hand_sides->data, right_hand_sides->leading_dim);
-    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceForwardsubUpdate);
+    SOLVE_STOP_TIMER(supernode, InPlaceForwardsubUpdate);
   }
 }
 
@@ -337,6 +482,7 @@ template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides) const {
   BENCHMARK_SCOPED_TIMER_SECTION timer("LowerTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
+  SolveProfile::Scope phase_profile(solve_profile_, -1, FineGrainedTimersSolve::ForwardPhase);
 
   // Allocate the workspace.
   const Int workspace_size = max_degree_ * right_hand_sides->width;
@@ -412,6 +558,7 @@ template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
     BlasMatrixView<Field> &work_right_hand_sides) const {
+  SolveProfile::Scope node_profile(solve_profile_, supernode, FineGrainedTimersSolve::BackwardNode);
   const Int num_rhs = right_hand_sides->width;
   const bool is_selfadjoint =
       control_.factorization_type != kLDLTransposeFactorization;
@@ -422,13 +569,28 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
   BlasMatrixView<Field> right_hand_sides_supernode =
       right_hand_sides->Submatrix(supernode_start, 0, supernode_size, num_rhs);
 
-  const ConstBlasMatrixView<Field> & subdiagonal =
-      lower_factor_->blocks[supernode];
+  const ConstBlasMatrixView<Field> subdiagonal = lower_factor_->blocks[supernode].ToConst();
   const Int degree = subdiagonal.height;
+  if constexpr (std::is_same<Field, double>::value || std::is_same<Field, float>::value) {
+    if (supernode_size <= solve_kernels::Policy<BLOCK_SIZE>::fused_backward_max_size &&
+        degree <= solve_kernels::Policy<BLOCK_SIZE>::fused_backward_max_degree && num_rhs == 1 &&
+        control_.factorization_type == kCholeskyFactorization && !control_.supernodal_pivoting) {
+      SOLVE_START_TIMER(supernode, FusedBackward);
+      solve_kernels::fused_backward<BLOCK_SIZE>(diagonal_factor_->blocks[supernode].ToConst(),
+          subdiagonal, right_hand_sides_supernode.data, right_hand_sides->data, indices);
+      SOLVE_STOP_TIMER(supernode, FusedBackward);
+      return;
+    }
+  }
   if (degree) {
-    const bool out_of_place = (supernode_size >= control_.backward_solve_out_of_place_supernode_threshold) || (degree >= 100);
+    using Policy = solve_kernels::Policy<BLOCK_SIZE>;
+    const Int size_threshold = control_.backward_solve_out_of_place_supernode_threshold < 0
+        ? Policy::backward_size : control_.backward_solve_out_of_place_supernode_threshold;
+    const Int degree_threshold = control_.backward_solve_out_of_place_degree_threshold < 0
+        ? Policy::backward_degree : control_.backward_solve_out_of_place_degree_threshold;
+    const bool out_of_place = supernode_size >= size_threshold || degree >= degree_threshold;
     if (out_of_place) {
-      FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
+      SOLVE_START_TIMER(supernode, OutOfPlaceBacksubUpdate);
       // Fill the work right_hand_sides.
       for (Int j = 0; j < num_rhs; ++j) {
         const Field * const  rhs_ptr =      right_hand_sides->Pointer(0, j);
@@ -437,16 +599,16 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
         using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
         using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2 && std::is_same<Field, double>::value) ? Eigen::Aligned16 : Eigen::Unaligned>;
         for (Int i = 0; i < degree; i += BLOCK_SIZE) {
-            // (VMap(wrhs_ptr)) = CVMap(rhs_ptr + indices[i]);
+            // (VMap(wrhs_ptr)) = CVMap(rhs_ptr + indices[i / BLOCK_SIZE]);
             // wrhs_ptr += BLOCK_SIZE;
-            const Field *src = rhs_ptr + indices[i];
+            const Field *src = rhs_ptr + indices[i / BLOCK_SIZE];
             for (Int c = 0; c < BLOCK_SIZE; ++c)
               *(wrhs_ptr++) = *(src++);
         }
       }
 
       if (is_selfadjoint) {
-        MatrixMultiplyAdjointNormal(Field{-1}, subdiagonal,
+        solve_kernels::multiply<BLOCK_SIZE>(true, Field{-1}, subdiagonal,
                                     work_right_hand_sides.ToConst(), Field{1},
                                     &right_hand_sides_supernode);
       } else {
@@ -454,18 +616,18 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
                                       work_right_hand_sides.ToConst(), Field{1},
                                       &right_hand_sides_supernode);
       }
-      FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, OutOfPlaceBacksubUpdate);
+      SOLVE_STOP_TIMER(supernode, OutOfPlaceBacksubUpdate);
     } else {
-      FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
+      SOLVE_START_TIMER(supernode, InPlaceBacksubUpdate);
       trs_kernels::MultiplyLowerBlockAdjoint<Field, BLOCK_SIZE>::run(
-              is_selfadjoint, indices, supernode_start, supernode_size, subdiagonal.height,
-              subdiagonal.data, subdiagonal.leading_dim,
-              num_rhs, right_hand_sides->data, right_hand_sides->leading_dim);
-      FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, InPlaceBacksubUpdate);
+          is_selfadjoint, indices, supernode_start, supernode_size, subdiagonal.height,
+          subdiagonal.data, subdiagonal.leading_dim,
+          num_rhs, right_hand_sides->data, right_hand_sides->leading_dim);
+      SOLVE_STOP_TIMER(supernode, InPlaceBacksubUpdate);
     }
   }
 
-  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+  SOLVE_START_TIMER(supernode, BackwardSolveDiag);
 
   // Solve against the diagonal block of this supernode.
   const ConstBlasMatrixView<Field> diag_block = diagonal_factor_->blocks[supernode];
@@ -474,13 +636,9 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
         LeftLowerAdjointTriangularSolves(diag_block, &right_hand_sides_supernode);
     }
     else {
-#if 1
         if (supernode_size < 24)
           trs_kernels::SolveLowerTriAdjoint<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
         else TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
-#else
-        TriangularSolveLeftLowerAdjoint(diag_block, right_hand_sides_supernode.Data());
-#endif
     }
   } else if (control_.factorization_type == kLDLAdjointFactorization) {
     LeftLowerAdjointUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
@@ -493,7 +651,7 @@ void Factorization<Field>::LowerTransposeSupernodalTrapezoidalSolve(
     Permute(permutation, &right_hand_sides_supernode);
   }
 
-  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+  SOLVE_STOP_TIMER(supernode, BackwardSolveDiag);
 }
 
 template <class Field>
@@ -521,6 +679,7 @@ template <Int BLOCK_SIZE>
 void Factorization<Field>::LowerTransposeTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides) const {
   BENCHMARK_SCOPED_TIMER_SECTION timer("LowerTransposeTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
+  SolveProfile::Scope phase_profile(solve_profile_, -1, FineGrainedTimersSolve::BackwardPhase);
 
   // Allocate the workspace.
   const Int workspace_size = max_degree_ * right_hand_sides->width;

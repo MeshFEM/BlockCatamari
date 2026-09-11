@@ -17,6 +17,7 @@
 #include <tbb/task_group.h>
 #include <catamari/sparse_ldl/supernodal/supernode_utils-impl.hpp>
 
+#include "factorization/solve_profile.hpp"
 #include <bitset>
 #include <stdexcept>
 
@@ -125,11 +126,9 @@ struct Control {
 #endif
 
   // The minimal supernode size to switch to out-of-place trapezoidal solves.
-#if defined(__APPLE__)
-  Int backward_solve_out_of_place_supernode_threshold = 64;
-#else
-  Int backward_solve_out_of_place_supernode_threshold = 18;
-#endif
+  // A negative value selects the platform/block-size default.
+  Int backward_solve_out_of_place_supernode_threshold = -1;
+  Int backward_solve_out_of_place_degree_threshold = -1;
 
   // // The algorithmic block size for the factorization.
   Int blas_block_size = 64;
@@ -332,6 +331,8 @@ class Factorization {
       const CoordinateMatrix<Field>& matrix, const Control<Field>& control);
 
   SparseLDLResult<Field> RefactorWithFixedSparsityPattern(const ConversionPlan &cplan, Int blockSize, const Field *Ax, Field sigma = 0, const Field *Bx = nullptr) {
+      if (blockSize != lower_factor_->IndexBlockSize())
+          throw std::runtime_error("Numerical kernel block size must match index block size");
       CoordinateMatrix<Field> dummy;
       m_inputData.cplan = &cplan;
       m_inputData.Ax = Ax;
@@ -638,10 +639,17 @@ class Factorization {
 
   std::unique_ptr<Factorization> ExpandSymbolicFactorizationToScalar(Int block_size) const {
       BENCHMARK_SCOPED_TIMER_SECTION timer("ExpandSymbolicFactorizationToScalar");
+      if (block_size < 1 || lower_factor_->IndexBlockSize() != 1)
+          throw std::invalid_argument("Expected unscaled symbolic block structure");
 
       std::unique_ptr<Factorization> result = std::make_unique<Factorization>();
       result->control_  = control_;
       result->ordering_ = ordering_;
+
+      // Child maps depend on scalar offsets and must be built for the new layout.
+      result->ordering_.assembly_forest.num_child_diag_indices.Clear();
+      result->ordering_.assembly_forest.child_rel_indices_offsets.Clear();
+      result->ordering_.assembly_forest.child_rel_indices.Clear();
 
       // "Upgrade" the supernode sizes to be multiples of the block size.
       using VMap = Eigen::Map<Eigen::Matrix<Int, Eigen::Dynamic, 1>>;
@@ -686,7 +694,7 @@ class Factorization {
           for (Int s = 0; s < num_supernodes; ++s)
               supernode_degrees[s] = block_size * lower_factor_->blocks[s].height;
 
-          result->m_allocateFactors(supernode_degrees);
+          result->m_allocateFactors(supernode_degrees, block_size);
       }
 
       {
@@ -699,19 +707,15 @@ class Factorization {
           if (block_lf.HasValues() || block_df.HasValues())
               throw std::runtime_error("Legacy mode does not support block factorization!");
 
-          // Expand the structure indices.
+          // Retain one index per original block, scaled to a scalar base offset.
           parallel_for_range(num_supernodes, [&](Int s) {
               Int num_block_structure_indices = std::distance( block_lf.StructureBeg(s),  block_lf.StructureEnd(s));
               Int num_structure_indices       = std::distance(scalar_lf.StructureBeg(s), scalar_lf.StructureEnd(s));
-              if (block_size * num_block_structure_indices != num_structure_indices) { throw std::logic_error("Structure size mismatch"); }
+              if (num_block_structure_indices != num_structure_indices) { throw std::logic_error("Structure size mismatch"); }
 
               Int *dst = scalar_lf.StructureBeg(s);
-              for (const Int *src = block_lf.StructureBeg(s); src != block_lf.StructureEnd(s); ++src) {
-                  Int block_row = *src;
-                  for (Int c = 0; c < block_size; ++c) {
-                      *dst++ = block_size * block_row + c;
-                  }
-              }
+              for (const Int *src = block_lf.StructureBeg(s); src != block_lf.StructureEnd(s); ++src)
+                  *dst++ = block_size * *src;
           }, /* grain_size */ 64, /* parallelism_threshold */ 128);
 
           // Left-looking-specific structures and workspace sizes
@@ -748,12 +752,20 @@ class Factorization {
       shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
   }
 
+  void ConfigureSolveProfile(bool enabled, int max_depth = -1, Int min_width = 0) {
+      solve_profile_.configure(ordering_, enabled, max_depth, min_width);
+  }
+  void ResetSolveProfile() { solve_profile_.reset(); }
+  void WriteSolveProfile(const std::string &path) const { solve_profile_.write(path); }
+
   void WriteFinegrainedSolveTimerStats(const std::string &directory, Int max_levels = std::numeric_limits<Int>::max()) const {
       solve_shared_state_.WriteFinegrainedTimerStats(directory, ordering_.assembly_forest, max_levels);
   }
 
   void ResetFinegrainedSolveTimerStats() {
+#if CATAMARI_FINEGRAINED_TIMERS
       solve_shared_state_.finegrained_timers.clear();
+#endif
   }
 
   // Only can be called after `InitialFactorizationSetup` because it needs access to
@@ -853,7 +865,21 @@ private:
 
   mutable Buffer<Field> permute_scratch_;
   mutable SolveSharedState solve_shared_state_;
-
+  mutable SolveProfile solve_profile_;
+  // Cached contiguous postorder intervals for serial subtrees.
+  mutable Buffer<Int> solve_postorder_, solve_subtree_begin_, solve_subtree_end_;
+  struct SolveAccumulationGroup {
+    Int root;
+    std::vector<Field> scratch;
+  };
+  mutable bool solve_accumulation_ready_ = false;
+  mutable std::vector<SolveAccumulationGroup> solve_accumulation_groups_;
+  mutable Buffer<Int> solve_accumulation_group_for_root_, solve_accumulation_owned_, solve_accumulation_offsets_;
+  mutable std::vector<Int> solve_accumulation_external_;
+  void PrepareSolveAccumulationCache() const;
+  template<Int BLOCK_SIZE>
+  void SolveAccumulationGroupForward(Int group, BlasMatrixView<Field>* rhs,
+                                     SolveSharedState* shared_state) const;
   // Performs the initial analysis (and factorization initialization) for a
   // particular sparsity pattern. Subsequent factorizations with the same
   // sparsity pattern can reuse the symbolic analysis.
@@ -979,7 +1005,7 @@ private:
   template<Int BLOCK_SIZE>
   void OpenMPLowerSupernodalTrapezoidalSolve(
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
-      BlasMatrixView<Field> *supernode_schur_complement) const;
+      BlasMatrixView<Field> *supernode_schur_complement, bool initialize_output = false) const;
 
   // Performs the portion of the transposed lower-triangular solve
   // corresponding to the subtree with the given root supernode.
@@ -1004,7 +1030,7 @@ private:
       Int supernode, BlasMatrixView<Field>* right_hand_sides,
       BlasMatrixView<Field> &work_right_hand_sides) const;
 
-  void m_allocateFactors(const Buffer<Int> &supernode_degrees);
+  void m_allocateFactors(const Buffer<Int> &supernode_degrees, Int index_block_size = 1);
 };
 
 }  // namespace supernodal_ldl

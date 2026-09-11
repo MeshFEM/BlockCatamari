@@ -24,7 +24,6 @@
 
 #include <MeshFEMCore/GlobalBenchmark.hh>
 
-#define USE_STACK_DFS_INSTEAD_OF_SERIAL_RECURSION 1
 // USE_TLS_SCHUR_RHS: whether to use a separate thread-local workspace buffer
 // for storing the "schur complement" updates in LowerTransposeSupernodalTrapezoidalSolve
 // or to use the per-supernode storage buffers; theoretically this can help cache
@@ -44,7 +43,8 @@ template <class Field>
 template <Int BLOCK_SIZE>
 void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
     Int supernode, BlasMatrixView<Field>* right_hand_sides,
-    BlasMatrixView<Field>* supernode_schur_complement) const {
+    BlasMatrixView<Field>* supernode_schur_complement, bool initialize_output) const {
+  SolveProfile::Scope node_profile(solve_profile_, supernode, FineGrainedTimersSolve::ForwardNode);
   const Int num_rhs = right_hand_sides->width;
   const bool is_cholesky =
       control_.factorization_type == kCholeskyFactorization;
@@ -55,7 +55,17 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
   BlasMatrixView<Field> right_hand_sides_supernode =
       right_hand_sides->Submatrix(supernode_start, 0, supernode_size, num_rhs);
 
-  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+
+  if (is_cholesky && !control_.supernodal_pivoting && num_rhs == 1 &&
+      supernode_size <= solve_kernels::Policy<BLOCK_SIZE>::fused_forward_max_size) {
+    SOLVE_START_TIMER(supernode, FusedForward);
+    solve_kernels::fused_forward(diag_block, lower_factor_->blocks[supernode].ToConst(),
+        right_hand_sides_supernode.data, supernode_schur_complement->data, initialize_output);
+    SOLVE_STOP_TIMER(supernode, FusedForward);
+    return;
+  }
+
+  SOLVE_START_TIMER(supernode, ForwardSolveDiag);
 
   // Solve against the diagonal block of the supernode.
   if (control_.supernodal_pivoting) {
@@ -66,27 +76,65 @@ void Factorization<Field>::OpenMPLowerSupernodalTrapezoidalSolve(
   if (is_cholesky) {
     if (right_hand_sides_supernode.width > 1)
         LeftLowerTriangularSolves(diag_block, &right_hand_sides_supernode);
-    else
-        if (supernode_size < 24)
-          trs_kernels::SolveLowerTri<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
-    else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
+    else {
+      if (supernode_size < 24)
+        trs_kernels::SolveLowerTri<Field, BLOCK_SIZE>::run(supernode_size, diag_block.data, diag_block.leading_dim, right_hand_sides_supernode.data);
+      else TriangularSolveLeftLower(diag_block, right_hand_sides_supernode.Data());
+    }
   } else {
     LeftLowerUnitTriangularSolves(diag_block, &right_hand_sides_supernode);
   }
 
-  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, SolveDiag);
+  SOLVE_STOP_TIMER(supernode, ForwardSolveDiag);
 
-  const ConstBlasMatrixView<Field> subdiagonal = lower_factor_->blocks[supernode];
+  const ConstBlasMatrixView<Field> subdiagonal = lower_factor_->blocks[supernode].ToConst();
   if (!subdiagonal.height) {
     return;
   }
 
   // Store the updates in the workspace.
-  FG_START_TIMER(solve_shared_state_.finegrained_timers, supernode, MultiplySubdiagonal);
-  MatrixMultiplyNormalNormal(Field{-1}, subdiagonal,
-                             right_hand_sides_supernode.ToConst(), Field{1},
+  SOLVE_START_TIMER(supernode, MultiplySubdiagonal);
+  solve_kernels::multiply<BLOCK_SIZE>(false, Field{-1}, subdiagonal,
+                             right_hand_sides_supernode.ToConst(), initialize_output ? Field{0} : Field{1},
                              supernode_schur_complement);
-  FG_STOP_TIMER(solve_shared_state_.finegrained_timers, supernode, MultiplySubdiagonal);
+  SOLVE_STOP_TIMER(supernode, MultiplySubdiagonal);
+}
+
+template <class Field>
+template<Int BLOCK_SIZE>
+void Factorization<Field>::SolveAccumulationGroupForward(
+    Int group_index, BlasMatrixView<Field>* rhs, SolveSharedState* shared_state) const {
+  auto &group = solve_accumulation_groups_[group_index];
+  auto &boundary = shared_state->schur_complements[group.root];
+  SOLVE_START_TIMER(group.root, InitializeSchur);
+  if (boundary.height) std::fill(boundary.data, boundary.data + boundary.height, Field(0));
+  SOLVE_STOP_TIMER(group.root, InitializeSchur);
+  for (Int i = solve_subtree_begin_[group.root]; i < solve_subtree_end_[group.root]; ++i) {
+    const Int s = solve_postorder_[i];
+    const auto &lower = lower_factor_->blocks[s].ToConst();
+    const Int owned = solve_accumulation_owned_[s];
+    const Int *indices = lower_factor_->StructureBeg(s);
+    const Int *external = solve_accumulation_external_.empty() ? nullptr : solve_accumulation_external_.data() + solve_accumulation_offsets_[s];
+    if (ordering_.supernode_sizes[s] <= solve_kernels::Policy<BLOCK_SIZE>::fused_forward_max_size) {
+      SolveProfile::Scope node_profile(solve_profile_, s, FineGrainedTimersSolve::ForwardNode);
+      SOLVE_START_TIMER(s, FusedForward);
+      solve_kernels::fused_forward_scatter<BLOCK_SIZE>(diagonal_factor_->blocks[s].ToConst(), lower,
+          rhs->data + ordering_.supernode_offsets[s], rhs->data, boundary.data, indices, owned, external);
+      SOLVE_STOP_TIMER(s, FusedForward);
+    } else {
+      BlasMatrixView<Field> scratch;
+      scratch.data = group.scratch.data(); scratch.height = lower.height;
+      scratch.width = 1; scratch.leading_dim = lower.height;
+      OpenMPLowerSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, rhs, &scratch, true);
+      SOLVE_START_TIMER(s, MergeChildContributions);
+      using Vec = Eigen::Matrix<Field, BLOCK_SIZE, 1>;
+      for (Int j = 0; j < owned; ++j)
+        Eigen::Map<Vec>(rhs->data + indices[j]) += Eigen::Map<const Vec>(scratch.data + BLOCK_SIZE * j);
+      for (Int j = owned; j < lower.height / BLOCK_SIZE; ++j)
+        Eigen::Map<Vec>(boundary.data + external[j - owned]) += Eigen::Map<const Vec>(scratch.data + BLOCK_SIZE * j);
+      SOLVE_STOP_TIMER(s, MergeChildContributions);
+    }
+  }
 }
 
 template <class Field>
@@ -113,21 +161,23 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     else                result = shared_state->schur_complement_storage[s].allocateSingleMatrixForDegree(degree);
 #endif
 
+    SOLVE_START_TIMER(s, InitializeSchur);
     Field *rhs_col = result.data;
     for (Int j = 0; j < num_rhs; ++j) {
       std::fill(rhs_col, rhs_col + result.height, Field{0});
       rhs_col += result.leading_dim;
     }
+    SOLVE_STOP_TIMER(s, InitializeSchur);
   };
 
   auto mergeChild = [this, shared_state, right_hand_sides, num_rhs, subtreeStorage](const Int parent, const Int child_index, BlasMatrixView<Field> &main_right_hand_sides) {
-    FG_START_TIMER(solve_shared_state_.finegrained_timers, parent, MergeChildContributions);
+    SOLVE_START_TIMER(parent, MergeChildContributions);
     const Int child = ordering_.assembly_forest.children[child_index];
 
     const Int* child_indices = lower_factor_->StructureBeg(child);
     BlasMatrixView<Field>& child_right_hand_sides = shared_state->schur_complements[child];
     const Int child_degree = child_right_hand_sides.height;
-    assert(child_degree == ordering_.assembly_forest.child_rel_indices_offsets[child + 1] - ordering_.assembly_forest.child_rel_indices_offsets[child]);
+    assert(child_degree == BLOCK_SIZE * (ordering_.assembly_forest.child_rel_indices_offsets[child + 1] - ordering_.assembly_forest.child_rel_indices_offsets[child]));
 
     const Int supernode_size = ordering_.supernode_sizes[parent];
     const Int num_child_diag_indices = ordering_.assembly_forest.num_child_diag_indices[child];
@@ -135,7 +185,6 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     using   Vec = VecN_T<Field, BLOCK_SIZE>;
     using  VMap = Eigen::Map<      Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
     using CVMap = Eigen::Map<const Vec, (BLOCK_SIZE == 2) ? Eigen::Aligned16 : Eigen::Unaligned>;
-#if 1
     const Int *child_rel_indices = ordering_.assembly_forest.child_rel_indices.Data() + ordering_.assembly_forest.child_rel_indices_offsets[child];
     for (Int j = 0; j < num_rhs; ++j) {
         const Field* CATAMARI_RESTRICT crhs_col = child_right_hand_sides.Pointer(0, j);
@@ -143,28 +192,11 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
         Field*       CATAMARI_RESTRICT mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
 
         for (Int i = 0; i < num_child_diag_indices; i += BLOCK_SIZE)
-            VMap(rhs_col + child_indices[i]) += CVMap(crhs_col + i);
+            VMap(rhs_col + child_indices[i / BLOCK_SIZE]) += CVMap(crhs_col + i);
 
         for (Int i = num_child_diag_indices; i < child_degree; i += BLOCK_SIZE)
-            VMap(mrhs_col + child_rel_indices[i]) += CVMap(crhs_col + i);
+            VMap(mrhs_col + child_rel_indices[i / BLOCK_SIZE]) += CVMap(crhs_col + i);
     }
-#else
-    for (Int j = 0; j < num_rhs; ++j) {
-        Field* CATAMARI_RESTRICT  rhs_col = right_hand_sides->Pointer(0, j);
-        Field* CATAMARI_RESTRICT mrhs_col = main_right_hand_sides.Pointer(-supernode_size, j);
-        const Field* CATAMARI_RESTRICT crhs_col = child_right_hand_sides.Pointer(0, j);
-
-        for (Int i = 0; i < num_child_diag_indices; i += BLOCK_SIZE) {
-            const Int row = child_indices[i];
-            VMap(rhs_col) += CVMap(crhs_col + i);
-        }
-        for (Int i = num_child_diag_indices, main_i = 0; i < child_degree; i += BLOCK_SIZE) {
-            const Int row = child_indices[i];
-            while (main_indices[main_i] != row) main_i += BLOCK_SIZE;
-            VMap(mrhs_col + main_i) += CVMap(crhs_col + i);
-        }
-    }
-#endif
 
 #if SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
     // Pop the child Schur complement from the stack.
@@ -176,19 +208,18 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     child_right_hand_sides.data = nullptr;
 #endif
 
-    FG_STOP_TIMER(solve_shared_state_.finegrained_timers, parent, MergeChildContributions);
+    SOLVE_STOP_TIMER(parent, MergeChildContributions);
   };
 
   // Recurse on this supernode's children.
   const auto &af = ordering_.assembly_forest;
   const Int child_beg = af.child_offsets[supernode];
   const Int child_end = af.child_offsets[supernode + 1];
+  auto finishNode = [&](Int s, BlasMatrixView<Field> &scrhs) {
+      OpenMPLowerSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &scrhs);
+  };
 
-#if 1
-  const bool serialSubtree = (work_estimates_[supernode] < 1e6) || (level > 8); // Avoid excessive task scheduling overhead/use larger serial subtrees
-#else
-  const bool serialSubtree = level > 8;
-#endif
+  const bool serialSubtree = (work_estimates_[supernode] < solve_kernels::forward_work) || (level > solve_kernels::forward_max_depth);
 
   if ((child_end - child_beg) > 1 && !serialSubtree) {
       tbb::task_group group;
@@ -209,9 +240,28 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     if (child_end > child_beg) processChild(child_beg);
     BlasMatrixView<Field> &scrhs = shared_state->schur_complements[supernode];
     prepare_schur_complement_rhs(supernode, scrhs);
-    if (child_end > child_beg) mergeChild(supernode, child_beg,  scrhs);
+    if (child_end > child_beg) mergeChild(supernode, child_beg, scrhs);
   }
   else {
+#if !SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
+    if (num_rhs == 1 && !control_.supernodal_pivoting &&
+        control_.factorization_type == kCholeskyFactorization) {
+      const Int group = solve_accumulation_group_for_root_[supernode];
+      assert(group >= 0 && solve_accumulation_groups_[group].root == supernode);
+      SolveAccumulationGroupForward<BLOCK_SIZE>(group, right_hand_sides, shared_state);
+      return;
+    }
+    // Multiple RHS and LDL retain the original child-merge order.
+    for (Int i = solve_subtree_begin_[supernode]; i < solve_subtree_end_[supernode]; ++i) {
+      const Int s = solve_postorder_[i];
+      auto &scrhs = shared_state->schur_complements[s];
+      prepare_schur_complement_rhs(s, scrhs);
+      for (Int ci = af.child_offsets[s]; ci < af.child_offsets[s + 1]; ++ci)
+        mergeChild(s, ci, scrhs);
+      finishNode(s, scrhs);
+    }
+    return;
+#else
 #if SOLVE_USE_DYNAMIC_SCHUR_COMPLEMENT_STORAGE
     // Process this subtree serially. We use a stack-based DFS to avoid
     // passing more parameters through recursion.
@@ -242,7 +292,7 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
         }
         else { // last child was processed
           if (ci == cb) prepare_schur_complement_rhs(s, scrhs); // there were no children...
-          OpenMPLowerSupernodalTrapezoidalSolve<BLOCK_SIZE>(s, right_hand_sides, &scrhs);
+          finishNode(s, scrhs);
           stack.pop();
         }
     };
@@ -250,11 +300,12 @@ void Factorization<Field>::OpenMPLowerTriangularSolveRecursion(
     // Note: subtreeStorage will be deallocated by the caller...
 
     return; // we already did all work for this supernode!
+#endif
   }
 
   // Perform this supernode's trapezoidal solve.
   BlasMatrixView<Field> &scrhs = shared_state->schur_complements[supernode];
-  OpenMPLowerSupernodalTrapezoidalSolve<BLOCK_SIZE>(supernode, right_hand_sides, &scrhs);
+  finishNode(supernode, scrhs);
 }
 
 template <class Field>
@@ -263,6 +314,7 @@ void Factorization<Field>::OpenMPLowerTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides,
     SolveSharedState* shared_state) const {
   BENCHMARK_SCOPED_TIMER_SECTION timer("ParallelLowerTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
+    SolveProfile::Scope phase_profile(solve_profile_, -1, FineGrainedTimersSolve::ForwardPhase);
 
   const Int num_roots = ordering_.assembly_forest.roots.Size();
 
@@ -360,37 +412,19 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolveRecursion(
         if (numChildren == 1) processChild(child_beg);
         return;
     }
-#if 1
-  // const bool serialSubtree = (work_estimates_[supernode] < 1e5); // Avoid excessive task scheduling overhead/use larger serial subtrees
-  const bool serialSubtree = (work_estimates_[supernode] < 2e6) || (level > 8); // Avoid excessive task scheduling overhead/use larger serial subtrees
-#else
-    const bool serialSubtree = level > 8; // Avoid excessive task scheduling overhead
-#endif
+  const bool serialSubtree = (work_estimates_[supernode] < solve_kernels::backward_work) || (level > solve_kernels::backward_max_depth);
     if (serialSubtree) {
-#if USE_STACK_DFS_INSTEAD_OF_SERIAL_RECURSION
-        std::stack<std::pair<Int, Int>> stack;
-        stack.push({supernode, ordering_.assembly_forest.child_offsets[supernode]});
-        while (!stack.empty()) {
-            auto &t = stack.top();
-            Int s = t.first;
-            Int &ci = t.second;
-
-            if (ci < ordering_.assembly_forest.child_offsets[s + 1]) {
-                const Int child = ordering_.assembly_forest.children[ci];
+        // The root has already been solved. Reverse postorder visits each
+        // descendant after its parent; sibling solves are independent.
+        const Int count = solve_subtree_end_[supernode] - solve_subtree_begin_[supernode] - 1;
+        for (Int offset = 0; offset < count; ++offset) {
+            const Int child = solve_postorder_[solve_subtree_end_[supernode] - 2 - offset];
 #if USE_TLS_SCHUR_RHS
-                LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(child, right_hand_sides, &workspace_buffer);
+            LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(child, right_hand_sides, &workspace_buffer);
 #else
-                LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(child, right_hand_sides, shared_state->schur_complements[child]);
+            LowerTransposeSupernodalTrapezoidalSolve<BLOCK_SIZE>(child, right_hand_sides, shared_state->schur_complements[child]);
 #endif
-                stack.push({child, ordering_.assembly_forest.child_offsets[child]}); // descend
-                ++ci;
-            }
-            else stack.pop();
-        };
-#else // !USE_STACK_DFS_INSTEAD_OF_SERIAL_RECURSION
-        for (Int child_index = child_beg; child_index < child_end; ++child_index)
-            processChild(child_index);
-#endif // USE_STACK_DFS_INSTEAD_OF_SERIAL_RECURSION
+        }
         return;
     }
 
@@ -406,6 +440,7 @@ void Factorization<Field>::OpenMPLowerTransposeTriangularSolve(
     BlasMatrixView<Field>* right_hand_sides,
     SolveSharedState* shared_state) const {
     BENCHMARK_SCOPED_TIMER_SECTION timer("ParallelTransposeTriangularSolve<" + std::to_string(BLOCK_SIZE) + ">");
+    SolveProfile::Scope phase_profile(solve_profile_, -1, FineGrainedTimersSolve::BackwardPhase);
 
 #if USE_TLS_SCHUR_RHS
     const Int nt = tbb::this_task_arena::max_concurrency();

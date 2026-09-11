@@ -42,7 +42,7 @@ void Factorization<Field>::BlockLeftLookingSupernodeUpdate(Int supernode, LeftLo
     // TODO(Jack Poulson): Switch away from pointers to Int members.
     const Int* structure = lower_factor_->StructureBeg(supernode);
     for (Int i = 0; i < supernode_degree; i += BlockSize) {
-        local_index_for_L_row[structure[i]] = i;
+        local_index_for_L_row[structure[i / BlockSize]] = i;
     }
 
     shared_state->rel_rows[supernode] = 0;
@@ -63,7 +63,7 @@ void Factorization<Field>::BlockLeftLookingSupernodeUpdate(Int supernode, LeftLo
         const Int intersect_blocks = intersect_size / BlockSize;
         assert(intersect_blocks * BlockSize == intersect_size && "Intersect size must be a multiple of BlockSize");
 
-        const Int* descendant_structure = lower_factor_->StructureBeg(descendant) + descendant_main_rel_row;
+        const Int* descendant_structure = lower_factor_->StructureBeg(descendant) + descendant_main_rel_row / BlockSize;
 
         const ConstBlasMatrixView<Field> descendant_main_matrix = descendant_lower_block.Submatrix(descendant_main_rel_row, 0, intersect_size, descendant_size);
 
@@ -79,7 +79,7 @@ void Factorization<Field>::BlockLeftLookingSupernodeUpdate(Int supernode, LeftLo
         if (!inplace_subdiag_update) {
             // Store the relative indices of the diagonal block.
             for (Int i_rel = 0; i_rel < intersect_blocks; ++i_rel) {
-                const Int i = descendant_structure[BlockSize * i_rel];
+                const Int i = descendant_structure[i_rel];
                 rel_ind[i_rel] = i - supernode_offset; // Index of local decendent row within this supernode's diagonal block.
             }
         }
@@ -148,7 +148,7 @@ void Factorization<Field>::BlockLeftLookingSupernodeUpdate(Int supernode, LeftLo
                 const Int descendant_main_block_degree = descendant_main_degree / BlockSize;
                 const Int descendant_block_degree_remaining = descendant_degree_remaining / BlockSize;
                 for (Int i_rel = intersect_blocks; i_rel < descendant_main_block_degree; ++i_rel) {
-                    const Int i = descendant_structure[BlockSize * i_rel];
+                    const Int i = descendant_structure[i_rel];
                     rel_ind[i_rel] = local_index_for_L_row[i];
                 }
 
@@ -174,7 +174,7 @@ void Factorization<Field>::BlockLeftLookingSupernodeUpdate(Int supernode, LeftLo
             // Insert the descendant supernode into the list of its next ancestor.
             // NOTE: We would need a lock for this in a multithreaded setting.
             const Int next_ancestor =
-                supernode_member_to_index_[descendant_structure[intersect_size]];
+                supernode_member_to_index_[descendant_structure[intersect_size / BlockSize]];
             shared_state->descendants.Insert(next_ancestor, descendant);
         }
     }

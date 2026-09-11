@@ -160,7 +160,7 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
 }
 
 template <class Field>
-void Factorization<Field>::m_allocateFactors(const Buffer<Int> &supernode_degrees) {
+void Factorization<Field>::m_allocateFactors(const Buffer<Int> &supernode_degrees, Int index_block_size) {
     // Count sizes of the lower and diagonal parts of the factor.
     Int diagSize = 0, lowerSize = 0;
     const Int num_supernodes = supernode_degrees.Size();
@@ -179,7 +179,7 @@ void Factorization<Field>::m_allocateFactors(const Buffer<Int> &supernode_degree
     factor_values_.Resize(diagSize + lowerSize, 1);
     // std::cout << "Lower factor size: " << diagSize << " + " << lowerSize << " = " << diagSize + lowerSize << std::endl;
     diagonal_factor_ = std::make_unique<DiagonalFactor<Field>>(ordering_.supernode_sizes,                    factor_values_.Submatrix(       0, 0,  diagSize, 1));
-    lower_factor_    = std::make_unique<   LowerFactor<Field>>(ordering_.supernode_sizes, supernode_degrees, factor_values_.Submatrix(diagSize, 0, lowerSize, 1));
+    lower_factor_    = std::make_unique<   LowerFactor<Field>>(ordering_.supernode_sizes, supernode_degrees, factor_values_.Submatrix(diagSize, 0, lowerSize, 1), index_block_size);
 
     // Modify the diagonal/lower block pointers to that their data is
     // interleaved to form contiguous frontal matrix columns.
@@ -325,8 +325,6 @@ void Factorization<Field>::InitializeBlockColumn(
   const Int supernode_start = ordering_.supernode_offsets[supernode];
   const Int supernode_size = ordering_.supernode_sizes[supernode];
   const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
-  const Int* index_beg = lower_factor_->StructureBeg(supernode);
-  const Int* index_end = lower_factor_->StructureEnd(supernode);
   for (Int j = supernode_start; j < supernode_start + supernode_size; ++j) {
     const Int j_rel = j - supernode_start;
     const Int j_orig = have_permutation ? ordering_.inverse_permutation[j] : j;
@@ -354,12 +352,7 @@ void Factorization<Field>::InitializeBlockColumn(
       if (row < supernode_start + supernode_size) {
         diag_column_ptr[row - supernode_start] = value;
       } else {
-        const Int* iter = std::lower_bound(index_beg, index_end, row);
-        CATAMARI_ASSERT(iter != index_end, "Exceeded row indices.");
-        CATAMARI_ASSERT(*iter == row, "Entry (" + std::to_string(row) + ", " +
-                                          std::to_string(j) +
-                                          ") wasn't in the structure.");
-        const Int rel_row = std::distance(index_beg, iter);
+        const Int rel_row = lower_factor_->FindScalarRow(supernode, row);
         lower_column_ptr[rel_row] = value;
       }
     }
@@ -379,6 +372,16 @@ SparseLDLResult<Field> Factorization<Field>::Factor(
   // (Shouldn't actually be necessary since `SparseLDL::Factor`
   //  constructs a new `Factorization` object every time)
   work_estimates_.Clear();
+  solve_postorder_.Clear();
+  solve_accumulation_ready_ = false;
+  solve_accumulation_groups_.clear();
+  solve_accumulation_group_for_root_.Clear();
+  solve_accumulation_owned_.Clear();
+  solve_accumulation_offsets_.Clear();
+  solve_accumulation_external_.clear();
+  solve_profile_ = SolveProfile{};
+  solve_subtree_begin_.Clear();
+  solve_subtree_end_.Clear();
   shared_state_.schur_complements.Clear();
   shared_state_.schur_complement_storage.Clear();
   solve_shared_state_.schur_complements.Clear();

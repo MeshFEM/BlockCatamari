@@ -34,6 +34,8 @@ struct AssemblyForest {
   Buffer<Int> roots;
 
   // Julian Panetta: mapping from each child structure to its parent front.
+  // Offsets count stored blocks; entries are scalar bases in the parent front.
+  // num_child_diag_indices remains a scalar row count.
   mutable Buffer<Int> child_rel_indices_offsets;
   mutable Buffer<Int> child_rel_indices;
   mutable Buffer<Int> num_child_diag_indices;

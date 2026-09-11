@@ -805,17 +805,7 @@ void FillNonzeros(const CoordinateMatrix<Field>& matrix,
       }
 
       // Insert the value into the subdiagonal block.
-      const Int* column_index_beg =
-          lower_factor->StructureBeg(column_supernode);
-      const Int* column_index_end =
-          lower_factor->StructureEnd(column_supernode);
-      const Int* iter =
-          std::lower_bound(column_index_beg, column_index_end, row);
-      CATAMARI_ASSERT(iter != column_index_end, "Exceeded column indices.");
-      CATAMARI_ASSERT(*iter == row, "Entry (" + std::to_string(row) + ", " +
-                                        std::to_string(column) +
-                                        ") wasn't in the structure.");
-      const Int rel_row = std::distance(column_index_beg, iter);
+      const Int rel_row = lower_factor->FindScalarRow(column_supernode, row);
       const Int rel_column =
           column - ordering.supernode_offsets[column_supernode];
       lower_factor->blocks[column_supernode](rel_row, rel_column) = entry.value;
@@ -935,8 +925,8 @@ void UpdateDiagonalBlock(
   if (!inplace_update) {
     // Apply the out-of-place update and zero the buffer.
     const Int main_supernode_start = supernode_starts[main_supernode];
-    const Int* descendant_main_indices =
-        lower_factor.StructureBeg(descendant_supernode) +
+    const auto descendant_main_indices =
+        lower_factor.ScalarStructureBeg(descendant_supernode) +
         descendant_main_rel_row;
 
     for (Int j = 0; j < descendant_main_intersect_size; ++j) {
@@ -987,14 +977,14 @@ void UpdateSubdiagonalBlock(
   if (!inplace_update) {
     const Int main_supernode_start = supernode_starts[main_supernode];
 
-    const Int* main_indices = lower_factor.StructureBeg(main_supernode);
-    const Int* main_active_indices = main_indices + main_active_rel_row;
+    const auto main_indices = lower_factor.ScalarStructureBeg(main_supernode);
+    const auto main_active_indices = main_indices + main_active_rel_row;
 
-    const Int* descendant_indices =
-        lower_factor.StructureBeg(descendant_supernode);
-    const Int* descendant_main_indices =
+    const auto descendant_indices =
+        lower_factor.ScalarStructureBeg(descendant_supernode);
+    const auto descendant_main_indices =
         descendant_indices + descendant_main_rel_row;
-    const Int* descendant_active_indices =
+    const auto descendant_active_indices =
         descendant_indices + descendant_active_rel_row;
 
     CATAMARI_ASSERT(
@@ -1048,10 +1038,11 @@ void constructChildToParentMap(const SymmetricOrdering& ordering,
     crio[0] = 0;
     for (Int s = 0; s < num_supernodes; ++s) {
         Int degree = lower_factor->blocks[s].height;
-        crio[s + 1] = crio[s] + degree;
+        crio[s + 1] = crio[s] + degree / lower_factor->IndexBlockSize();
+        ncdi[s] = 0;
     }
 
-    cri.Resize(crio[num_supernodes]);
+    cri.Resize(std::max<Int>(1, crio[num_supernodes]));
 
     tbb::parallel_for(tbb::blocked_range<Int>(0, num_supernodes), [&](const tbb::blocked_range<Int> &r) {
         for (Int child = r.begin(); child < r.end(); ++child) {
@@ -1079,18 +1070,19 @@ void populateChildToParentMap(Int supernode, Int child, Int child_degree,
     num_child_diag_indices = 0;
 
     const Int* child_indices = lower_factor->StructureBeg(child);
+    const Int block_size = lower_factor->IndexBlockSize();
     Int i_rel = 0;
-    for (Int i = 0; i < child_degree; ++i) {
+    for (Int i = 0; i < child_degree / block_size; ++i) {
         const Int row = child_indices[i];
         if (row < supernode_end) {
             child_rel_indices[i] = row - supernode_start;
-            ++num_child_diag_indices;
+            num_child_diag_indices += block_size;
         } else {
             while (parent_indices[i_rel] != row) {
                 ++i_rel;
-                assert(i_rel < lower_factor->blocks[supernode].height && "Relative index is out-of-bounds.");
+                assert(i_rel < lower_factor->blocks[supernode].height / block_size && "Relative index is out-of-bounds.");
             }
-            child_rel_indices[i] = supernode_size + i_rel; // index into the lower block of the front (diagonal and lower factor blocks are now unified/interleaved!)
+            child_rel_indices[i] = supernode_size + block_size * i_rel; // index into the lower block of the front (diagonal and lower factor blocks are now unified/interleaved!)
         }
     }
 }
@@ -1113,11 +1105,11 @@ void MergeChildSchurComplements(Int supernode,
 
   const Int supernode_size = ordering.supernode_sizes[supernode];
   const Int supernode_start = ordering.supernode_offsets[supernode];
-  const Int* main_indices = lower_factor->StructureBeg(supernode);
+  const auto main_indices = lower_factor->ScalarStructureBeg(supernode);
   for (Int child_index = 0; child_index < num_children; ++child_index) {
     const Int child =
         ordering.assembly_forest.children[child_beg + child_index];
-    const Int* child_indices = lower_factor->StructureBeg(child);
+    const auto child_indices = lower_factor->ScalarStructureBeg(child);
     Buffer<Field>& child_schur_complement_buffer =
         shared_state->schur_complement_buffers[child];
     BlasMatrixView<Field>& child_schur_complement =

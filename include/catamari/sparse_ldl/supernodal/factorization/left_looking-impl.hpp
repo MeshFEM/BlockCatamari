@@ -36,7 +36,7 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
 
   // Scatter the pattern of this supernode into pattern_flags.
   // TODO(Jack Poulson): Switch away from pointers to Int members.
-  const Int* structure = lower_factor_->StructureBeg(supernode);
+  const auto structure = lower_factor_->ScalarStructureBeg(supernode);
   for (Int i = 0; i < supernode_degree; ++i) {
     local_index_for_L_row[structure[i]] = i;
   }
@@ -60,10 +60,10 @@ void Factorization<Field>::LeftLookingSupernodeUpdate(
     const Int intersect_size = *shared_state->intersect_ptrs[descendant]; // How much of descendant's structure falls within this supernode
     CATAMARI_ASSERT(intersect_size > 0, "Non-positive intersection size.");
 
-    const Int* descendant_structure =
-        lower_factor_->StructureBeg(descendant) + descendant_main_rel_row;
+    const auto descendant_structure =
+        lower_factor_->ScalarStructureBeg(descendant) + descendant_main_rel_row;
     CATAMARI_ASSERT(
-        descendant_structure < lower_factor_->StructureEnd(descendant),
+        descendant_structure < lower_factor_->ScalarStructureEnd(descendant),
         "Relative row exceeded end of structure.");
     CATAMARI_ASSERT(
         supernode_member_to_index_[*descendant_structure] == supernode,
