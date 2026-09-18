@@ -255,8 +255,8 @@ inline MergableStatus MergableSupernode(
   return status;
 }
 
-inline void MergeChildren(Int parent, const Buffer<Int>& /* orig_supernode_starts */,
-                          const Buffer<Int>& /* orig_supernode_sizes */,
+inline void MergeChildren(Int parent, const Buffer<Int>& orig_supernode_starts,
+                          const Buffer<Int>& orig_supernode_sizes,
                           const Buffer<Int>& orig_supernode_degrees,
                           const Buffer<Int>& child_list_heads,
                           const Buffer<Int>& child_lists,
@@ -275,6 +275,19 @@ inline void MergeChildren(Int parent, const Buffer<Int>& /* orig_supernode_start
          child = child_lists[child]) {
       if ((*merge_parents)[child] != -1) {
         continue;
+      }
+
+      if (control.preserve_ordering) {
+        // To preserve ordering, we only allow merging (prepending) a child that
+        // is directly adjacent with the leftmost edge of this enlarging
+        // supernode. last_merged_child tracks the leftmost original supernode,
+        // if any, that has been absorbed.
+        const Int leftmost_supernode = (*last_merged_child)[parent] == -1
+                                     ? parent : (*last_merged_child)[parent];
+        const Int child_end = orig_supernode_starts[child] + orig_supernode_sizes[child];
+        if (child_end != orig_supernode_starts[leftmost_supernode]) {
+          continue;
+        }
       }
 
       const Int child_size = (*supernode_sizes)[child];

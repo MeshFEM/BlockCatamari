@@ -50,6 +50,12 @@ struct SupernodalRelaxationControl {
   // `MergableSupernode`
   Int block_size = 1;
 
+  // Restrict relaxation to adjacent child/parent column intervals so that
+  // amalgamation preserves the supplied factor ordering. This can produce
+  // more supernodes than unrestricted relaxation. Has no effect when
+  // relax_supernodes is false.
+  bool preserve_ordering = false;
+
 };
 
 namespace supernodal_ldl {
