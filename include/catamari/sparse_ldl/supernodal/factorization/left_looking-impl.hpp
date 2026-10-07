@@ -391,6 +391,7 @@ SparseLDLResult<Field> Factorization<Field>::LeftLooking(
             diagonal_block(j, j) += m_inputData.sigma;
     }
 #endif
+    m_inputData.cplan->applyOverrides(sno, sno + supernode_size, factor_values_.Data());
 
     CATAMARI_STOP_TIMER(profile.initialize_columns);
 

@@ -65,6 +65,23 @@ struct ConversionPlan {
     const Entry *columnDataEnd  (int j, bool upperTri) const { assert(isBlock); return entries() + columnOffsets[2 * j + upperTri + 1]; }
 
     Eigen::Array<Int, Eigen::Dynamic, 1> columnOffsets;
+
+    // Overrides to the numerical values to be factored (applied after
+    // the standard zeroing/value injection/shifting process and before
+    // any elimination updates). This can be used to implement variable pin
+    // constraints by overwriting with rows/cols of the identity matrix.
+    // Overrides are stored in a *scalar* CSC-type format with index and value
+    // records stored jointly in the single `overrides` array.
+    struct Override { Int dst; double value; };
+    std::vector<Override> overrides;
+    Eigen::Array<Int, Eigen::Dynamic, 1> overrideColumnOffsets;
+    template<class Field>
+    void applyOverrides(Int begin, Int end, Field *factorValues) const {
+        if (overrides.empty()) return;
+        for (Int k = overrideColumnOffsets[begin]; k < overrideColumnOffsets[end]; ++k)
+            factorValues[overrides[k].dst] = Field(overrides[k].value);
+    }
+
     bool isBlock = false;
 private:
     Buffer<Entry> m_entries;
@@ -465,6 +482,7 @@ class Factorization {
       Int numColumnEntries = diagonal_block.leading_dim - local_j; // Number of nonzero entries on the diagonal of L and below
       VMap(diagonal_block.Pointer(local_j, local_j), numColumnEntries).setZero();
       m_inputData.injectEntries(j, factor_values_.Data(), diagonal_block(local_j, local_j));
+      m_inputData.cplan->applyOverrides(j, j + 1, factor_values_.Data());
   }
 
   template<Int BlockSize>
@@ -477,6 +495,7 @@ class Factorization {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
       }
+      m_inputData.cplan->applyOverrides(j, j + BlockSize, factor_values_.Data());
   }
 
   void InitializeFactorColumns(Int supernode_offset, Int jstart, Int jend, BlasMatrixView<Field> &diagonal_block) {
@@ -487,6 +506,7 @@ class Factorization {
           for (Int c = jstart; c < jend; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      m_inputData.cplan->applyOverrides(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
   }
 
   void InitializeFactorSupernodeColumns(Int supernode_offset, Int supernode_size, BlasMatrixView<Field> &diagonal_block) {
@@ -497,6 +517,7 @@ class Factorization {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      m_inputData.cplan->applyOverrides(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
   }
 
   // Versions using a block conversion plan.
@@ -510,6 +531,7 @@ class Factorization {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
       }
+      m_inputData.cplan->applyOverrides(j, j + BlockSize, factor_values_.Data());
   }
 
   template<Int BlockSize>
@@ -521,6 +543,7 @@ class Factorization {
           for (Int c = jstart; c < jend; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      m_inputData.cplan->applyOverrides(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
   }
 
   template<Int BlockSize>
@@ -532,6 +555,7 @@ class Factorization {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      m_inputData.cplan->applyOverrides(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
   }
 
   // Returns the number of rows in the last factored matrix.
