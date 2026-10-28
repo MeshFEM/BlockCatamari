@@ -332,7 +332,8 @@ class Factorization {
   // Factors the given matrix using the prescribed permutation.
   SparseLDLResult<Field> Factor(const CoordinateMatrix<Field>& matrix,
                                 const SymmetricOrdering& manual_ordering,
-                                const Control<Field>& control, bool symbolic_only = false);
+                                const Control<Field>& control, bool symbolic_only = false,
+                                scalar_ldl::EliminationForestWorkspace* workspace = nullptr);
 
   // Factors the given matrix after having previously factored another matrix
   // with the same sparsity pattern.
@@ -909,7 +910,8 @@ private:
   // sparsity pattern can reuse the symbolic analysis.
   // When `block_size != 1`, each nonzero in `matrix` represents a
   // `block_size x block_size` nonzero block.
-  void InitialFactorizationSetup(const CoordinateMatrix<Field>& matrix);
+  void InitialFactorizationSetup(const CoordinateMatrix<Field>& matrix,
+                                scalar_ldl::EliminationForestWorkspace* workspace = nullptr);
 #ifdef CATAMARI_OPENMP
   void OpenMPInitialFactorizationSetup(const CoordinateMatrix<Field>& matrix);
 #endif  // ifdef CATAMARI_OPENMP
@@ -918,7 +920,8 @@ private:
 
   // Form the (possibly relaxed) supernodes for the factorization.
   void FormSupernodes(const CoordinateMatrix<Field>& matrix,
-                      Buffer<Int>* supernode_degrees);
+                      Buffer<Int>* supernode_degrees,
+                      scalar_ldl::EliminationForestWorkspace* workspace = nullptr);
 
 #ifdef CATAMARI_OPENMP
   void OpenMPFormSupernodes(const CoordinateMatrix<Field>& matrix,

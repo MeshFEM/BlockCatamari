@@ -130,7 +130,7 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
     supernodal_factorization.reset(new supernodal_ldl::Factorization<Field>);
     result = supernodal_factorization->Factor(*matrix_to_factor, ordering,
                                               control.supernodal_control,
-                                              symbolic_only);
+                                              symbolic_only, &elimination_workspace);
   } else {
     quotient_graph.release();
     scalar_factorization.reset(new scalar_ldl::Factorization<Field>);
@@ -182,7 +182,8 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
   if (is_supernodal) {
     supernodal_factorization.reset(new supernodal_ldl::Factorization<Field>);
     result = supernodal_factorization->Factor(*matrix_to_factor, ordering,
-                                              control.supernodal_control, symbolic_only);
+                                              control.supernodal_control, symbolic_only,
+                                              &elimination_workspace);
   } else {
     scalar_factorization.reset(new scalar_ldl::Factorization<Field>);
     result = scalar_factorization->Factor(*matrix_to_factor, ordering,

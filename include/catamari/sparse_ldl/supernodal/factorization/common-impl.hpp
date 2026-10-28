@@ -66,13 +66,16 @@ void Factorization<Field>::MergeContribution(
 
 template <class Field>
 void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
-                                          Buffer<Int>* supernode_degrees) {
+                                          Buffer<Int>* supernode_degrees,
+                                          scalar_ldl::EliminationForestWorkspace* workspace) {
   const int max_threads = get_max_num_tbb_threads();
 
   BENCHMARK_SCOPED_TIMER_SECTION timer("FormSupernodes");
   CATAMARI_START_TIMER(profile.scalar_elimination_forest);
-  Buffer<Int> scalar_parents;
-  Buffer<Int> scalar_degrees;
+  scalar_ldl::EliminationForestWorkspace local_workspace;
+  auto& work = workspace ? *workspace : local_workspace;
+  auto& scalar_parents = work.parents;
+  auto& scalar_degrees = work.degrees;
   const bool explicitly_permute = false;  // TODO(Jack Poulson): Make optional.
   if (ordering_.permutation.Empty()) {
     scalar_ldl::EliminationForestAndDegrees(matrix, &scalar_parents,
@@ -90,7 +93,7 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
     // this can be obtained, e.g., from AMD).
     if ((max_threads > 1) && (ordering_.assembly_forest.roots.Size() > 0)) {
       scalar_ldl::ParallelEliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
-                                                      &scalar_degrees);
+                                                      &scalar_degrees, &work);
     } else {
       scalar_ldl::EliminationForestAndDegrees(matrix, ordering_, &scalar_parents,
                                         &scalar_degrees);
@@ -303,10 +306,10 @@ ConstBlasMatrixView<Int> Factorization<Field>::SupernodePermutation(
 
 template <class Field>
 void Factorization<Field>::InitialFactorizationSetup(
-    const CoordinateMatrix<Field>& matrix) {
+    const CoordinateMatrix<Field>& matrix, scalar_ldl::EliminationForestWorkspace* workspace) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("InitialFactorizationSetup");
   Buffer<Int> supernode_degrees;
-  FormSupernodes(matrix, &supernode_degrees);
+  FormSupernodes(matrix, &supernode_degrees, workspace);
   CATAMARI_START_TIMER(profile.initialize_factors);
   InitializeFactors(matrix, supernode_degrees);
   CATAMARI_STOP_TIMER(profile.initialize_factors);
@@ -363,7 +366,7 @@ template <class Field>
 SparseLDLResult<Field> Factorization<Field>::Factor(
     const CoordinateMatrix<Field>& matrix,
     const SymmetricOrdering& manual_ordering, const Control<Field>& control,
-    bool symbolic_only) {
+    bool symbolic_only, scalar_ldl::EliminationForestWorkspace* workspace) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("supernodal_ldl.Factorization.Factor");
   control_ = control;
   ordering_ = manual_ordering;
@@ -393,7 +396,7 @@ SparseLDLResult<Field> Factorization<Field>::Factor(
   profile.Reset();
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
-  InitialFactorizationSetup(matrix);
+  InitialFactorizationSetup(matrix, workspace);
 
   SparseLDLResult<Field> result;
   if (symbolic_only) return result;

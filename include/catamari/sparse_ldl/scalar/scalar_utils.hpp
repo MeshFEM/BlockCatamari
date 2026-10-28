@@ -8,6 +8,7 @@
 #ifndef CATAMARI_SPARSE_LDL_SCALAR_SCALAR_UTILS_H_
 #define CATAMARI_SPARSE_LDL_SCALAR_SCALAR_UTILS_H_
 
+#include <atomic>
 #include <stack>
 #include <vector>
 
@@ -20,6 +21,16 @@
 
 namespace catamari {
 namespace scalar_ldl {
+
+// Reusable storage, not cached symbolic results. Owned by one factorization;
+// concurrent analyses must use separate workspaces.
+struct EliminationForestWorkspace {
+  Buffer<Int> parents, degrees;
+  Buffer_mimalloc<std::atomic<bool>> child_locks;
+  Buffer_mimalloc<Int> child_heads, child_next;
+  Buffer_mimalloc<Buffer_mimalloc<Int>> structures;
+  Buffer_mimalloc<Buffer_mimalloc<Int>> pattern_flags, tmp_structures;
+};
 
 // Computes the elimination forest (via the 'parents' array) of a scalar
 // (simplicial) LDL' factorization.
@@ -72,7 +83,8 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
 template <class Field>
 void ParallelEliminationForestAndDegrees(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
-    Buffer<Int>* parents, Buffer<Int>* degrees);
+    Buffer<Int>* parents, Buffer<Int>* degrees,
+    EliminationForestWorkspace* workspace = nullptr);
 
 #ifdef CATAMARI_OPENMP
 template <class Field>

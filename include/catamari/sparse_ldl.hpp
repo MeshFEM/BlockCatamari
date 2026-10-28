@@ -126,6 +126,10 @@ class SparseLDL {
   std::unique_ptr<supernodal_ldl::Factorization<Field>>
       supernodal_factorization;
 
+  // Keep symbolic scratch storage across replacement of the actual factors.
+  // Clones start with their own empty workspace.
+  scalar_ldl::EliminationForestWorkspace elimination_workspace;
+
   std::unique_ptr<SparseLDL> Clone() const {
     std::unique_ptr<SparseLDL> result = std::make_unique<SparseLDL>();
     result->is_supernodal = is_supernodal;
