@@ -12,6 +12,7 @@
 #include <memory>
 #include <stdexcept>
 
+#include "catamari/sparse_pattern_view.hpp"
 #include "catamari/sparse_ldl/scalar.hpp"
 #include "catamari/sparse_ldl/supernodal.hpp"
 #include "quotient/minimum_degree.hpp"
@@ -142,12 +143,13 @@ class SparseLDL {
     return result;
   }
 
-  std::unique_ptr<SparseLDL> ExpandSymbolicFactorizationToScalar(Int block_size) const {
+  // Consume an optional reusable value buffer without copying its contents.
+  std::unique_ptr<SparseLDL> ExpandSymbolicFactorizationToScalar(Int block_size, Buffer<Field>* factor_values = nullptr) const {
     std::unique_ptr<SparseLDL> result = std::make_unique<SparseLDL>();
     result->is_supernodal = is_supernodal;
     if (!is_supernodal || !supernodal_factorization || scalar_factorization)
         throw std::runtime_error("Only supernodal factorizations support cloning");
-    result->supernodal_factorization = supernodal_factorization->ExpandSymbolicFactorizationToScalar(block_size);
+    result->supernodal_factorization = supernodal_factorization->ExpandSymbolicFactorizationToScalar(block_size, factor_values);
     result->have_equilibration_      = have_equilibration_;
     result->equilibration_           = equilibration_;
 
@@ -157,16 +159,33 @@ class SparseLDL {
   // The default constructor.
   SparseLDL();
 
+  // Value-free symbolic analysis. Requires the supernodal backend and a full
+  // symmetric pattern; equilibration requires values and is not supported.
+  // As in Factor, deferred_factor_values optionally receives the old value buffer.
+  template <class Index>
+  void AnalyzePattern(const SparsePatternView<Index>& matrix,
+                      const SymmetricOrdering& ordering,
+                      const SparseLDLControl<Field>& control,
+                      Buffer<Field>* deferred_factor_values = nullptr);
+  template <class Index>
+  void AnalyzePattern(const SparsePatternView<Index>& matrix,
+                      const SparseLDLControl<Field>& control,
+                      Buffer<Field>* deferred_factor_values = nullptr);
+
   // Performs the factorization using an automatically determined ordering.
+  // Normally reuse the previous supernodal value buffer immediately. If supplied,
+  // deferred_factor_values receives it instead, for a later scalar expansion.
   SparseLDLResult<Field> Factor(const CoordinateMatrix<Field>& matrix,
                                 const SparseLDLControl<Field>& control,
-                                bool symbolic_only = false);
+                                bool symbolic_only = false,
+                                Buffer<Field>* deferred_factor_values = nullptr);
 
   // Performs the factorization using a prescribed ordering.
   SparseLDLResult<Field> Factor(const CoordinateMatrix<Field>& matrix,
                                 const SymmetricOrdering& ordering,
                                 const SparseLDLControl<Field>& control,
-                                bool symbolic_only = false);
+                                bool symbolic_only = false,
+                                Buffer<Field>* deferred_factor_values = nullptr);
 
   // Returns the diagonal perturbation -- in the original ordering -- given
   // the list of diagonal dynamic regularization permutations in the

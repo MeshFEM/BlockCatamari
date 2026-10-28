@@ -41,8 +41,8 @@ inline void ProcessEdge(Int row, Int column, Buffer<Int>* parents, Buffer<Int>* 
   }
 }
 
-template <class Field>
-void EliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForest(const Matrix& matrix,
                        Buffer<Int>* parents, Buffer<Int>* ancestors) {
   const Int num_rows = matrix.NumRows();
 
@@ -52,18 +52,17 @@ void EliminationForest(const CoordinateMatrix<Field>& matrix,
   // For performing path compression.
   ancestors->Resize(num_rows, -1);
 
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int row = 0; row < num_rows; ++row) {
     const Int row_beg = matrix.RowEntryOffset(row);
     const Int row_end = matrix.RowEntryOffset(row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
-      ProcessEdge(row, entries[index].column, parents, ancestors);
+      ProcessEdge(row, matrix.ColumnIndex(index), parents, ancestors);
     }
   }
 }
 
-template <class Field>
-void EliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForest(const Matrix& matrix,
                        const SymmetricOrdering& ordering, Buffer<Int>* parents,
                        Buffer<Int>* ancestors) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("EliminationForest");
@@ -78,36 +77,35 @@ void EliminationForest(const CoordinateMatrix<Field>& matrix,
   // For performing path compression.
   ancestors->Resize(num_rows, -1);
 
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int row = 0; row < num_rows; ++row) {
     const Int orig_row = ordering.inverse_permutation[row];
     const Int row_beg = matrix.RowEntryOffset(orig_row);
     const Int row_end = matrix.RowEntryOffset(orig_row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
-      const Int orig_col = entries[index].column;
+      const Int orig_col = matrix.ColumnIndex(index);
       ProcessEdge(row, ordering.permutation[orig_col], parents, ancestors);
     }
   }
 }
 
-template <class Field>
-void EliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForest(const Matrix& matrix,
                        Buffer<Int>* parents) {
   Buffer<Int> ancestors;
   EliminationForest(matrix, parents, &ancestors);
 }
 
-template <class Field>
-void EliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForest(const Matrix& matrix,
                        const SymmetricOrdering& ordering,
                        Buffer<Int>* parents) {
   Buffer<Int> ancestors;
   EliminationForest(matrix, ordering, parents, &ancestors);
 }
 
-template <class Field>
+template <class Matrix>
 void ParallelEliminationForestAndDegreesRecursion(
-    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    const Matrix& matrix, const SymmetricOrdering& ordering,
     Int root, bool keep_structures, Buffer<Int>* parents, Buffer<Int>* degrees,
     EliminationForestWorkspace& workspace, int depth = 0) {
   const Int order_child_beg = ordering.assembly_forest.child_offsets[root];
@@ -147,7 +145,6 @@ void ParallelEliminationForestAndDegreesRecursion(
   const Int supernode_offset = ordering.supernode_offsets[root];
   const Int supernode_end = ordering.supernode_sizes[root] + supernode_offset;
   const bool have_permutation = !ordering.permutation.Empty();
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int column = supernode_offset; column < supernode_end; ++column) {
     const Int orig_column = have_permutation ? ordering.inverse_permutation[column] : column;
     const Int column_beg = matrix.RowEntryOffset(orig_column);
@@ -162,8 +159,8 @@ void ParallelEliminationForestAndDegreesRecursion(
     if (first_child < 0) {
       // Incorporate this column's structure.
       for (Int index = column_beg; index < column_end; ++index) {
-        const Int row = have_permutation ? ordering.permutation[entries[index].column]
-                                         : entries[index].column;
+        const Int row = have_permutation ? ordering.permutation[matrix.ColumnIndex(index)]
+                                         : matrix.ColumnIndex(index);
         if (row <= column) continue;
         if (row < parent) parent = row;
         tmp_structure[degree++] = row;
@@ -194,9 +191,9 @@ void ParallelEliminationForestAndDegreesRecursion(
 
       // Incorporate this column's structure.
       for (Int index = column_beg; index < column_end; ++index) {
-        const MatrixEntry<Field>& entry = entries[index];
-        const Int row = have_permutation ? ordering.permutation[entry.column]
-                                         : entry.column;
+        const Int entry_column = matrix.ColumnIndex(index);
+        const Int row = have_permutation ? ordering.permutation[entry_column]
+                                         : entry_column;
         if (row <= column || pattern_flags[row] == column) continue;
         if (row < parent) parent = row;
         tmp_structure[degree++] = row;
@@ -216,7 +213,7 @@ void ParallelEliminationForestAndDegreesRecursion(
         Int next = NONE, next_loc = -1;
         // Advance to next admissible entry from this column
         while (col_head < column_end) {
-            Int row = entries[col_head].column;
+            Int row = matrix.ColumnIndex(col_head);
             if ((row == prev) || (perm(row) <= column)) ++col_head;
             else { next = row; break; }
         }
@@ -273,9 +270,9 @@ void ParallelEliminationForestAndDegreesRecursion(
 }
 
 
-template <class Field>
+template <class Matrix>
 void ParallelEliminationForestAndDegrees(
-    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    const Matrix& matrix, const SymmetricOrdering& ordering,
     Buffer<Int>* parents, Buffer<Int>* degrees,
     EliminationForestWorkspace* workspace) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("ParallelEliminationForestAndDegrees");
@@ -374,8 +371,8 @@ inline void PostorderFromEliminationForest(const Buffer<Int>& parents,
 }
 
 // TODO(Jack Poulson): Prevent redundancy with version with an ordering.
-template <class Field>
-void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void DegreesFromEliminationForest(const Matrix& matrix,
                                   const Buffer<Int>& parents,
                                   const Buffer<Int>& postorder,
                                   Buffer<Int>* degrees) {
@@ -427,7 +424,6 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
     set_parents[i] = i;
   }
 
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int row_post = 0; row_post < num_rows; ++row_post) {
     const Int row = postorder[row_post];
 
@@ -443,8 +439,7 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
     const Int row_beg = matrix.RowEntryOffset(row);
     const Int row_end = matrix.RowEntryOffset(row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
-      const MatrixEntry<Field>& entry = entries[index];
-      const Int column = entry.column;
+      const Int column = matrix.ColumnIndex(index);
       if (column <= row) {
         continue;
       }
@@ -497,8 +492,8 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
   }
 }
 
-template <class Field>
-void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void DegreesFromEliminationForest(const Matrix& matrix,
                                   const SymmetricOrdering& ordering,
                                   const Buffer<Int>& parents,
                                   const Buffer<Int>& postorder,
@@ -552,7 +547,6 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
     set_parents[i] = i;
   }
 
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int row_post = 0; row_post < num_rows; ++row_post) {
     const Int row = postorder[row_post];
 
@@ -569,8 +563,8 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
     const Int row_beg = matrix.RowEntryOffset(orig_row);
     const Int row_end = matrix.RowEntryOffset(orig_row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
-      const MatrixEntry<Field>& entry = entries[index];
-      const Int column = ordering.permutation[entry.column];
+      const Int entry_column = matrix.ColumnIndex(index);
+      const Int column = ordering.permutation[entry_column];
       if (column <= row) {
         continue;
       }
@@ -623,8 +617,8 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
   }
 }
 
-template <class Field>
-void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void SimpleEliminationForestAndDegrees(const Matrix& matrix,
                                        Buffer<Int>* parents,
                                        Buffer<Int>* degrees) {
   const Int num_rows = matrix.NumRows();
@@ -640,14 +634,12 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
   // each column.
   degrees->Resize(num_rows, 0);
 
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int row = 0; row < num_rows; ++row) {
     pattern_flags[row] = row;
     const Int row_beg = matrix.RowEntryOffset(row);
     const Int row_end = matrix.RowEntryOffset(row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
-      const MatrixEntry<Field>& entry = entries[index];
-      Int column = entry.column;
+      Int column = matrix.ColumnIndex(index);
 
       // We are traversing the strictly lower triangle and know that the
       // indices are sorted.
@@ -678,8 +670,8 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
   }
 }
 
-template <class Field>
-void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void SimpleEliminationForestAndDegrees(const Matrix& matrix,
                                        const SymmetricOrdering& ordering,
                                        Buffer<Int>* parents,
                                        Buffer<Int>* degrees) {
@@ -700,7 +692,6 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
   // each column.
   degrees->Resize(num_rows, 0);
 
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int row = 0; row < num_rows; ++row) {
     pattern_flags[row] = row;
 
@@ -708,8 +699,8 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
     const Int row_beg = matrix.RowEntryOffset(orig_row);
     const Int row_end = matrix.RowEntryOffset(orig_row + 1);
     for (Int index = row_beg; index < row_end; ++index) {
-      const MatrixEntry<Field>& entry = entries[index];
-      Int column = ordering.permutation[entry.column];
+      const Int entry_column = matrix.ColumnIndex(index);
+      Int column = ordering.permutation[entry_column];
 
       // We are traversing the strictly lower triangle and know that the
       // indices are sorted.
@@ -740,8 +731,8 @@ void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
   }
 }
 
-template <class Field>
-void EliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForestAndDegrees(const Matrix& matrix,
                                  Buffer<Int>* parents, Buffer<Int>* degrees) {
   EliminationForest(matrix, parents);
   Buffer<Int> postorder;
@@ -749,8 +740,8 @@ void EliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
   DegreesFromEliminationForest(matrix, *parents, postorder, degrees);
 }
 
-template <class Field>
-void EliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForestAndDegrees(const Matrix& matrix,
                                  const SymmetricOrdering& ordering,
                                  Buffer<Int>* parents, Buffer<Int>* degrees) {
   if (ordering.permutation.Empty()) {
@@ -763,8 +754,8 @@ void EliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
   DegreesFromEliminationForest(matrix, ordering, *parents, postorder, degrees);
 }
 
-template <class Field>
-Int ComputeRowPattern(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+Int ComputeRowPattern(const Matrix& matrix,
                       const SymmetricOrdering& ordering,
                       const Buffer<Int>& parents, Int row, Int* pattern_flags,
                       Int* row_structure) {
@@ -774,12 +765,11 @@ Int ComputeRowPattern(const CoordinateMatrix<Field>& matrix,
       have_permutation ? ordering.inverse_permutation[row] : row;
   const Int row_beg = matrix.RowEntryOffset(orig_row);
   const Int row_end = matrix.RowEntryOffset(orig_row + 1);
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   Int num_packed = 0;
   for (Int index = row_beg; index < row_end; ++index) {
-    const MatrixEntry<Field>& entry = entries[index];
+    const Int entry_column = matrix.ColumnIndex(index);
     Int column =
-        have_permutation ? ordering.permutation[entry.column] : entry.column;
+        have_permutation ? ordering.permutation[entry_column] : entry_column;
 
     if (column >= row) {
       if (have_permutation) {

@@ -9,6 +9,7 @@
 #define CATAMARI_SPARSE_LDL_SUPERNODAL_FACTORIZATION_COMMON_IMPL_H_
 
 #include <algorithm>
+#include <limits>
 
 #include "catamari/dense_basic_linear_algebra.hpp"
 #include "catamari/dense_factorizations.hpp"
@@ -65,9 +66,10 @@ void Factorization<Field>::MergeContribution(
 }
 
 template <class Field>
-void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
-                                          Buffer<Int>* supernode_degrees,
-                                          scalar_ldl::EliminationForestWorkspace* workspace) {
+template <class Matrix>
+void Factorization<Field>::FormSupernodes(
+    const Matrix& matrix, Buffer<Int>* supernode_degrees,
+    scalar_ldl::EliminationForestWorkspace* workspace) {
   const int max_threads = get_max_num_tbb_threads();
 
   BENCHMARK_SCOPED_TIMER_SECTION timer("FormSupernodes");
@@ -76,11 +78,11 @@ void Factorization<Field>::FormSupernodes(const CoordinateMatrix<Field>& matrix,
   auto& work = workspace ? *workspace : local_workspace;
   auto& scalar_parents = work.parents;
   auto& scalar_degrees = work.degrees;
-  const bool explicitly_permute = false;  // TODO(Jack Poulson): Make optional.
+  constexpr bool explicitly_permute = false;  // TODO(Jack Poulson): Make optional.
   if (ordering_.permutation.Empty()) {
     scalar_ldl::EliminationForestAndDegrees(matrix, &scalar_parents,
                                             &scalar_degrees);
-  } else if (explicitly_permute) {
+  } else if constexpr (explicitly_permute) {
     CoordinateMatrix<Field> reordered_matrix;
     PermuteMatrix(matrix, ordering_, &reordered_matrix);
     scalar_ldl::EliminationForestAndDegrees(reordered_matrix, &scalar_parents,
@@ -179,7 +181,15 @@ void Factorization<Field>::m_allocateFactors(const Buffer<Int> &supernode_degree
     }
 
     // Allocate a single buffer holding both parts of the factor.
-    factor_values_.Resize(diagSize + lowerSize, 1);
+    const Int num_values = diagSize + lowerSize;
+    auto &data = factor_values_.data;
+    // Add 12.5% headroom when growing a recycled allocation. Keep first-time
+    // allocations exact, including those of temporary block factors.
+    const Int margin = num_values / 8;
+    if (data.Capacity() && static_cast<UInt>(num_values) > data.Capacity()
+        && num_values <= std::numeric_limits<Int>::max() - margin)
+        data.Resize(num_values + margin);
+    factor_values_.Resize(num_values, 1);
     // std::cout << "Lower factor size: " << diagSize << " + " << lowerSize << " = " << diagSize + lowerSize << std::endl;
     diagonal_factor_ = std::make_unique<DiagonalFactor<Field>>(ordering_.supernode_sizes,                    factor_values_.Submatrix(       0, 0,  diagSize, 1));
     lower_factor_    = std::make_unique<   LowerFactor<Field>>(ordering_.supernode_sizes, supernode_degrees, factor_values_.Submatrix(diagSize, 0, lowerSize, 1), index_block_size);
@@ -199,8 +209,9 @@ void Factorization<Field>::m_allocateFactors(const Buffer<Int> &supernode_degree
 }
 
 template <class Field>
+template <class Matrix>
 void Factorization<Field>::InitializeFactors(
-    const CoordinateMatrix<Field>& matrix,
+    const Matrix& matrix,
     const Buffer<Int>& supernode_degrees) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("InitializeFactors");
 
@@ -305,8 +316,9 @@ ConstBlasMatrixView<Int> Factorization<Field>::SupernodePermutation(
 }
 
 template <class Field>
+template <class Matrix>
 void Factorization<Field>::InitialFactorizationSetup(
-    const CoordinateMatrix<Field>& matrix, scalar_ldl::EliminationForestWorkspace* workspace) {
+    const Matrix& matrix, scalar_ldl::EliminationForestWorkspace* workspace) {
   BENCHMARK_SCOPED_TIMER_SECTION timer("InitialFactorizationSetup");
   Buffer<Int> supernode_degrees;
   FormSupernodes(matrix, &supernode_degrees, workspace);
@@ -363,11 +375,10 @@ void Factorization<Field>::InitializeBlockColumn(
 }
 
 template <class Field>
-SparseLDLResult<Field> Factorization<Field>::Factor(
-    const CoordinateMatrix<Field>& matrix,
-    const SymmetricOrdering& manual_ordering, const Control<Field>& control,
-    bool symbolic_only, scalar_ldl::EliminationForestWorkspace* workspace) {
-  BENCHMARK_SCOPED_TIMER_SECTION timer("supernodal_ldl.Factorization.Factor");
+template <class Matrix>
+void Factorization<Field>::InitializeSymbolic(
+    const Matrix& matrix, const SymmetricOrdering& manual_ordering,
+    const Control<Field>& control, scalar_ldl::EliminationForestWorkspace* workspace) {
   control_ = control;
   ordering_ = manual_ordering;
 
@@ -397,6 +408,15 @@ SparseLDLResult<Field> Factorization<Field>::Factor(
 #endif  // ifdef CATAMARI_ENABLE_TIMERS
 
   InitialFactorizationSetup(matrix, workspace);
+}
+
+template <class Field>
+SparseLDLResult<Field> Factorization<Field>::Factor(
+    const CoordinateMatrix<Field>& matrix,
+    const SymmetricOrdering& manual_ordering, const Control<Field>& control,
+    bool symbolic_only, scalar_ldl::EliminationForestWorkspace* workspace) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("supernodal_ldl.Factorization.Factor");
+  InitializeSymbolic(matrix, manual_ordering, control, workspace);
 
   SparseLDLResult<Field> result;
   if (symbolic_only) return result;

@@ -324,8 +324,8 @@ void ConvertFromScalarToSupernodalEliminationForest(
 // Checks that a valid set of supernodes has been provided by explicitly
 // computing each row pattern and ensuring that each intersects entire
 // supernodes.
-template <class Field>
-bool ValidFundamentalSupernodes(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+bool ValidFundamentalSupernodes(const Matrix& matrix,
                                 const SymmetricOrdering& ordering,
                                 const Buffer<Int>& supernode_sizes);
 
@@ -392,19 +392,18 @@ void FillSubtreeWorkEstimates(Int root, const AssemblyForest& supernode_forest,
                               Buffer<double>* work_estimates);
 
 // Fills in the structure indices for the lower factor.
-template <class Field>
-void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
+template <class Field, class Matrix>
+void FillStructureIndices(const Matrix& matrix,
                           const SymmetricOrdering& ordering,
                           const Buffer<Int>& supernode_member_to_index,
                           LowerFactor<Field>* lower_factor);
 
-template <class Field>
-void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
+template <class Field, class Matrix>
+void ParallelFillStructureIndices(const Matrix& matrix,
                                 const SymmetricOrdering& ordering,
-                                const AssemblyForest& forest,
-                                const Buffer<Int>& degrees,
+                                const Buffer<Int>& supernode_member_to_index,
                                 LowerFactor<Field>* lower_factor,
-                                int sort_grain_size = 500);
+                                int sort_grain_size = 32);
 #ifdef CATAMARI_OPENMP
 template <class Field>
 void OpenMPFillStructureIndices(Int sort_grain_size,

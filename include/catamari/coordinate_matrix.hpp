@@ -71,6 +71,9 @@ using quotient::SwapClearVector;
 template <class Ring>
 class CoordinateMatrix {
  public:
+  // Column accessor shared with value-free sparse patterns.
+  Int ColumnIndex(Int index) const { return Entry(index).column; }
+
   // The trivial constructor.
   CoordinateMatrix();
 

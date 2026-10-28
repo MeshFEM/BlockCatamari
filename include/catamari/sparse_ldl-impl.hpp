@@ -30,13 +30,69 @@ SparseLDL<Field>::SparseLDL() {
 }
 
 template <class Field>
+template <class Index>
+void SparseLDL<Field>::AnalyzePattern(
+    const SparsePatternView<Index>& matrix, const SymmetricOrdering& ordering,
+    const SparseLDLControl<Field>& control, Buffer<Field>* deferred_factor_values) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("SparseLDL.Factor");
+  if (control.equilibrate || control.supernodal_strategy != kSupernodalFactorization)
+    throw std::invalid_argument("Pattern analysis requires unequilibrated supernodal factorization");
+
+  Buffer<Field> factor_values;
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION reset_timer("Factorization reset");
+    if (supernodal_factorization)
+      factor_values = std::move(supernodal_factorization->factor_values_.data);
+    scalar_factorization.reset();
+    supernodal_ldl::Factorization<Field>::ResetWithTiming(supernodal_factorization);
+    if (deferred_factor_values) *deferred_factor_values = std::move(factor_values);
+  }
+  is_supernodal = true;
+  have_equilibration_ = false;
+  supernodal_factorization = std::make_unique<supernodal_ldl::Factorization<Field>>();
+  supernodal_factorization->factor_values_.data = std::move(factor_values);
+  supernodal_factorization->AnalyzePattern(matrix, ordering, control.supernodal_control,
+                                         &elimination_workspace);
+}
+
+template <class Field>
+template <class Index>
+void SparseLDL<Field>::AnalyzePattern(
+    const SparsePatternView<Index>& matrix, const SparseLDLControl<Field>& control,
+    Buffer<Field>* deferred_factor_values) {
+  BENCHMARK_SCOPED_TIMER_SECTION timer("SparseLDL.Factor (no ordering)");
+  if (control.equilibrate || control.supernodal_strategy != kSupernodalFactorization)
+    throw std::invalid_argument("Pattern analysis requires unequilibrated supernodal factorization");
+  SymmetricOrdering ordering;
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION ordering_timer("quotient_graph");
+    quotient::QuotientGraph graph(matrix.NumRows(), matrix.OffsetData(),
+                                  matrix.IndexData(), control.md_control);
+    quotient::MinimumDegree(&graph);
+    graph.ComputePostorder(&ordering.inverse_permutation);
+    quotient::InvertPermutation(ordering.inverse_permutation, &ordering.permutation);
+    Buffer<Int> member_to_supernode;
+    graph.PermutedMemberToSupernode(ordering.inverse_permutation, &member_to_supernode);
+    graph.PermutedAssemblyParents(ordering.permutation, member_to_supernode,
+                                 &ordering.assembly_forest.parents);
+    ordering.assembly_forest.FillFromParents();
+    graph.PermutedSupernodeSizes(ordering.inverse_permutation, &ordering.supernode_sizes);
+    OffsetScan(ordering.supernode_sizes, &ordering.supernode_offsets);
+  }
+  AnalyzePattern(matrix, ordering, control, deferred_factor_values);
+}
+
+template <class Field>
 SparseLDLResult<Field> SparseLDL<Field>::Factor(
     const CoordinateMatrix<Field>& matrix,
     const SparseLDLControl<Field>& control,
-    bool symbolic_only) {
+    bool symbolic_only, Buffer<Field>* deferred_factor_values) {
   BENCHMARK_SCOPED_TIMER_SECTION meshfemtimer("SparseLDL.Factor (no ordering)");
+  Buffer<Field> factor_values;
+  if (supernodal_factorization) factor_values = std::move(supernodal_factorization->factor_values_.data);
   scalar_factorization.reset();
   supernodal_factorization.reset();
+  if (deferred_factor_values) *deferred_factor_values = std::move(factor_values);
 
   ScopedEnableFlushToZero scope_guard;
 
@@ -128,6 +184,7 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
     BENCHMARK_STOP_TIMER_SECTION("prepare_supernodes_and_assembly_forest");
 
     supernodal_factorization.reset(new supernodal_ldl::Factorization<Field>);
+    supernodal_factorization->factor_values_.data = std::move(factor_values);
     result = supernodal_factorization->Factor(*matrix_to_factor, ordering,
                                               control.supernodal_control,
                                               symbolic_only, &elimination_workspace);
@@ -145,13 +202,16 @@ template <class Field>
 SparseLDLResult<Field> SparseLDL<Field>::Factor(
     const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
     const SparseLDLControl<Field>& control,
-    bool symbolic_only) {
+    bool symbolic_only, Buffer<Field>* deferred_factor_values) {
   BENCHMARK_SCOPED_TIMER_SECTION meshfemtimer("SparseLDL.Factor");
   ScopedEnableFlushToZero scope_guard;
 
   BENCHMARK_START_TIMER_SECTION("Factorization reset");
+  Buffer<Field> factor_values;
+  if (supernodal_factorization) factor_values = std::move(supernodal_factorization->factor_values_.data);
   scalar_factorization.reset();
-  supernodal_factorization.reset();
+  supernodal_ldl::Factorization<Field>::ResetWithTiming(supernodal_factorization);
+  if (deferred_factor_values) *deferred_factor_values = std::move(factor_values);
   BENCHMARK_STOP_TIMER_SECTION("Factorization reset");
 
   if (control.supernodal_strategy == kScalarFactorization) {
@@ -181,6 +241,7 @@ SparseLDLResult<Field> SparseLDL<Field>::Factor(
   SparseLDLResult<Field> result;
   if (is_supernodal) {
     supernodal_factorization.reset(new supernodal_ldl::Factorization<Field>);
+    supernodal_factorization->factor_values_.data = std::move(factor_values);
     result = supernodal_factorization->Factor(*matrix_to_factor, ordering,
                                               control.supernodal_control, symbolic_only,
                                               &elimination_workspace);

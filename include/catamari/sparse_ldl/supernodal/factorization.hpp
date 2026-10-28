@@ -329,6 +329,48 @@ class Factorization {
 
   using SolveSharedState = RightLookingSharedState<Field, /* ForSolve = */ true>;
 
+  // Profile explicit resets on the calling thread, rather than instrumenting
+  // destructors that may run on workers. Release storage; do not retain it.
+  static void ResetWithTiming(std::unique_ptr<Factorization>& factorization) {
+    if (!factorization) return;
+    auto& f = *factorization;
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("Solve workspace");
+      f.solve_accumulation_groups_.clear();
+      f.permute_scratch_.Clear();
+      f.solve_shared_state_.schur_complement_storage.Clear();
+      f.solve_shared_state_.schur_complement_buffers.Clear();
+    }
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("Numeric workspace");
+      f.shared_state_.cholesky_flowgraphs.clear();
+      f.shared_state_.schur_complement_storage.Clear();
+      f.shared_state_.schur_complement_buffers.Clear();
+    }
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("Factor values");
+      f.factor_values_.data.Clear();
+    }
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("Factor structure");
+      f.lower_factor_.reset();
+      f.diagonal_factor_.reset();
+    }
+    {
+      // BENCHMARK_SCOPED_TIMER_SECTION timer("Remaining metadata");
+      factorization.reset();
+    }
+  }
+
+  // Analyze a value-free pattern without instantiating numerical kernels.
+  template <class Matrix>
+  void AnalyzePattern(const Matrix& matrix, const SymmetricOrdering& ordering,
+                      const Control<Field>& control,
+                      scalar_ldl::EliminationForestWorkspace* workspace = nullptr) {
+    BENCHMARK_SCOPED_TIMER_SECTION timer("supernodal_ldl.Factorization.Factor");
+    InitializeSymbolic(matrix, ordering, control, workspace);
+  }
+
   // Factors the given matrix using the prescribed permutation.
   SparseLDLResult<Field> Factor(const CoordinateMatrix<Field>& matrix,
                                 const SymmetricOrdering& manual_ordering,
@@ -662,7 +704,7 @@ class Factorization {
     return result;
   }
 
-  std::unique_ptr<Factorization> ExpandSymbolicFactorizationToScalar(Int block_size) const {
+  std::unique_ptr<Factorization> ExpandSymbolicFactorizationToScalar(Int block_size, Buffer<Field>* factor_values = nullptr) const {
       BENCHMARK_SCOPED_TIMER_SECTION timer("ExpandSymbolicFactorizationToScalar");
       if (block_size < 1 || lower_factor_->IndexBlockSize() != 1)
           throw std::invalid_argument("Expected unscaled symbolic block structure");
@@ -719,6 +761,9 @@ class Factorization {
           for (Int s = 0; s < num_supernodes; ++s)
               supernode_degrees[s] = block_size * lower_factor_->blocks[s].height;
 
+          // Move only the owning buffer. m_allocateFactors refreshes the fresh
+          // BlasMatrix view and all block views, growing storage only if needed.
+          if (factor_values) result->factor_values_.data = std::move(*factor_values);
           result->m_allocateFactors(supernode_degrees, block_size);
       }
 
@@ -910,7 +955,13 @@ private:
   // sparsity pattern can reuse the symbolic analysis.
   // When `block_size != 1`, each nonzero in `matrix` represents a
   // `block_size x block_size` nonzero block.
-  void InitialFactorizationSetup(const CoordinateMatrix<Field>& matrix,
+  template <class Matrix>
+  void InitializeSymbolic(const Matrix& matrix, const SymmetricOrdering& ordering,
+                          const Control<Field>& control,
+                          scalar_ldl::EliminationForestWorkspace* workspace);
+
+  template <class Matrix>
+  void InitialFactorizationSetup(const Matrix& matrix,
                                 scalar_ldl::EliminationForestWorkspace* workspace = nullptr);
 #ifdef CATAMARI_OPENMP
   void OpenMPInitialFactorizationSetup(const CoordinateMatrix<Field>& matrix);
@@ -919,7 +970,8 @@ private:
   // TODO(Jack Poulson): Add ReinitializeFactorization.
 
   // Form the (possibly relaxed) supernodes for the factorization.
-  void FormSupernodes(const CoordinateMatrix<Field>& matrix,
+  template <class Matrix>
+  void FormSupernodes(const Matrix& matrix,
                       Buffer<Int>* supernode_degrees,
                       scalar_ldl::EliminationForestWorkspace* workspace = nullptr);
 
@@ -929,7 +981,8 @@ private:
 #endif  // ifdef CATAMARI_OPENMP
 
 private:
-  void InitializeFactors(const CoordinateMatrix<Field>& matrix,
+  template <class Matrix>
+  void InitializeFactors(const Matrix& matrix,
                          const Buffer<Int>& supernode_degrees);
 #ifdef CATAMARI_OPENMP
   void OpenMPInitializeFactors(const CoordinateMatrix<Field>& matrix,

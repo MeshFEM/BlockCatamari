@@ -10,6 +10,7 @@
 
 #include "catamari/dense_factorizations/cholesky-impl.hpp"
 #include "catamari/sparse_ldl/supernodal/supernode_utils.hpp"
+#include <MeshFEMCore/GlobalBenchmark.hh>
 
 namespace catamari {
 namespace supernodal_ldl {
@@ -53,8 +54,8 @@ inline void ConvertFromScalarToSupernodalEliminationForest(
   }
 }
 
-template <class Field>
-bool ValidFundamentalSupernodes(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+bool ValidFundamentalSupernodes(const Matrix& matrix,
                                 const SymmetricOrdering& ordering,
                                 const Buffer<Int>& supernode_sizes) {
   const Int num_rows = matrix.NumRows();
@@ -538,8 +539,8 @@ inline void RelaxSupernodes(const SymmetricOrdering& orig_ordering,
   relaxed_ordering->assembly_forest.FillFromParents();
 }
 
-template <class Field>
-void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
+template <class Field, class Matrix>
+void FillStructureIndices(const Matrix& matrix,
                           const SymmetricOrdering& ordering,
                           const Buffer<Int>& supernode_member_to_index,
                           LowerFactor<Field>* lower_factor) {
@@ -559,7 +560,6 @@ void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
   }
 
   // Fill in the structure indices.
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int supernode = 0; supernode < num_supernodes; ++supernode) {
     const Int supernode_offset = ordering.supernode_offsets[supernode];
     const Int supernode_size = ordering.supernode_sizes[supernode];
@@ -573,9 +573,9 @@ void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
       const Int row_beg = matrix.RowEntryOffset(orig_row);
       const Int row_end = matrix.RowEntryOffset(orig_row + 1);
       for (Int index = row_beg; index < row_end; ++index) {
-        const MatrixEntry<Field>& entry = entries[index];
-        const Int column = have_permutation ? ordering.permutation[entry.column]
-                                            : entry.column;
+        const Int entry_column = matrix.ColumnIndex(index);
+        const Int column = have_permutation ? ordering.permutation[entry_column]
+                                            : entry_column;
 
         // Skip this entry if it is not to the left of the diagonal block.
         if (column >= supernode_offset) {
@@ -626,15 +626,15 @@ void FillStructureIndices(const CoordinateMatrix<Field>& matrix,
 #endif  // ifdef CATAMARI_DEBUG
 }
 
-template <class Field>
+template <class Field, class Matrix>
 void ParallelFillStructureIndicesRecursion(
-    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    const Matrix& matrix, const SymmetricOrdering& ordering,
     const Buffer<Int>& supernode_member_to_index, Int root,
     LowerFactor<Field>* lower_factor,
     Buffer_mimalloc<Buffer_mimalloc<Int>>* private_pattern_flags, Int depth) {
   const Int child_beg = ordering.assembly_forest.child_offsets[root];
   const Int child_end = ordering.assembly_forest.child_offsets[root + 1];
-  if (depth > 8) { // Avoid excessive TBB overhead by processing lower-down subtrees serially.
+  if (depth > 8 || child_end <= child_beg + 1) { // Avoid tasks for deep subtrees and unary chains.
       for (Int child_index = child_beg; child_index < child_end; ++child_index) {
           ParallelFillStructureIndicesRecursion(
                   matrix, ordering, supernode_member_to_index, ordering.assembly_forest.children[child_index],
@@ -661,6 +661,9 @@ void ParallelFillStructureIndicesRecursion(
 
   // Form this node's structure by unioning that of its direct children
   // (removing portions that intersect this supernode).
+  const Int supernode_size = ordering.supernode_sizes[root];
+  const Int supernode_offset = ordering.supernode_offsets[root];
+  const Int supernode_end = supernode_offset + supernode_size;
   Int* struct_ptr = lower_factor->StructureBeg(root);
   for (Int child_index = child_beg; child_index < child_end; ++child_index) {
     const Int child = ordering.assembly_forest.children[child_index];
@@ -669,13 +672,12 @@ void ParallelFillStructureIndicesRecursion(
     for (const Int* child_struct_ptr = child_struct_beg;
          child_struct_ptr != child_struct_end; ++child_struct_ptr) {
       const Int row = *child_struct_ptr;
-      const Int row_supernode = supernode_member_to_index[row];
-      if (row_supernode == root) {
+      CATAMARI_ASSERT(row >= supernode_offset, "row supernode was < root.");
+      if (row < supernode_end) {
         continue;
       }
 
       if (pattern_flags[row] != root) {
-        CATAMARI_ASSERT(row_supernode > root, "row supernode was < root.");
         pattern_flags[row] = root;
         *struct_ptr = row;
         ++struct_ptr;
@@ -684,10 +686,7 @@ void ParallelFillStructureIndicesRecursion(
   }
 
   // Incorporate this supernode's structure.
-  const Int supernode_size = ordering.supernode_sizes[root];
-  const Int supernode_offset = ordering.supernode_offsets[root];
   const bool have_permutation = !ordering.permutation.Empty();
-  const Buffer<MatrixEntry<Field>>& entries = matrix.Entries();
   for (Int column = supernode_offset;
        column < supernode_offset + supernode_size; ++column) {
     const Int orig_column =
@@ -695,11 +694,11 @@ void ParallelFillStructureIndicesRecursion(
     const Int column_beg = matrix.RowEntryOffset(orig_column);
     const Int column_end = matrix.RowEntryOffset(orig_column + 1);
     for (Int index = column_beg; index < column_end; ++index) {
-      const MatrixEntry<Field>& entry = entries[index];
+      const Int entry_column = matrix.ColumnIndex(index);
       const Int row =
-          have_permutation ? ordering.permutation[entry.column] : entry.column;
-      const Int row_supernode = supernode_member_to_index[row];
-      if (row_supernode <= root) {
+          have_permutation ? ordering.permutation[entry_column] : entry_column;
+      // Supernodes occupy contiguous ranges in elimination order.
+      if (row < supernode_end) {
         continue;
       }
 
@@ -716,37 +715,52 @@ void ParallelFillStructureIndicesRecursion(
                   "Stored too few indices.");
 }
 
-template <class Field>
-void ParallelFillStructureIndices(const CoordinateMatrix<Field>& matrix,
+template <class Field, class Matrix>
+void ParallelFillStructureIndices(const Matrix& matrix,
                                   const SymmetricOrdering& ordering,
                                   const Buffer<Int>& supernode_member_to_index,
                                   LowerFactor<Field>* lower_factor,
-                                  int sort_grain_size = 500) {
+                                  int sort_grain_size) {
   const Int num_rows = matrix.NumRows();
 
   // A data structure for marking whether or not a node is in the pattern of
   // the active row of the lower-triangular factor. Each thread potentially
   // needs its own since different subtrees can have intersecting structure.
   // (These are allocated on demand in parallel...)
-  Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags(tbb::this_task_arena::max_concurrency()); // WARNING: get_max_num_tbb_threads() leads to a crash due to noncontiguous thread indices after repeated calls to `set_max_num_tbb_threads`...
-
-  tbb::task_group tg;
-  for (const Int root : ordering.assembly_forest.roots) {
-    tg.run([root, &matrix, &ordering, &supernode_member_to_index,
-            &lower_factor, &private_pattern_flags]() {
-      ParallelFillStructureIndicesRecursion(
-          matrix, ordering, supernode_member_to_index, root, lower_factor,
-          &private_pattern_flags, 0);
-    });
+  Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags;
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION timer("Pattern workspace setup");
+    // Arena indices can exceed the global concurrency limit.
+    private_pattern_flags.Resize(tbb::this_task_arena::max_concurrency()); // WARNING: get_max_num_tbb_threads() leads to a crash due to noncontiguous thread indices after repeated calls to `set_max_num_tbb_t hreads`...
   }
-  tg.wait();
+
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION timer("Build structure indices");
+    tbb::task_group tg;
+    for (const Int root : ordering.assembly_forest.roots) {
+      tg.run([root, &matrix, &ordering, &supernode_member_to_index,
+              &lower_factor, &private_pattern_flags]() {
+        ParallelFillStructureIndicesRecursion(
+            matrix, ordering, supernode_member_to_index, root, lower_factor,
+            &private_pattern_flags, 0);
+      });
+    }
+    tg.wait();
+  }
 
   // Sort the structures.
-  const Int num_supernodes = ordering.supernode_sizes.Size();
-  parallel_for_range(num_supernodes, [&](Int s) {
-    std::sort(lower_factor->StructureBeg(s),
-              lower_factor->StructureEnd(s));
-  }, sort_grain_size, 2 * sort_grain_size);
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION timer("Sort structure indices");
+    const Int num_supernodes = ordering.supernode_sizes.Size();
+    parallel_for_range(num_supernodes, [&](Int s) {
+      std::sort(lower_factor->StructureBeg(s),
+                lower_factor->StructureEnd(s));
+    }, sort_grain_size, std::max(1000, 2 * sort_grain_size));
+  }
+  {
+    BENCHMARK_SCOPED_TIMER_SECTION timer("Pattern workspace cleanup");
+    private_pattern_flags.Clear();
+  }
 }
 
 template <class Field>

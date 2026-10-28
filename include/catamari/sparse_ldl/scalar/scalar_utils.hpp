@@ -37,11 +37,11 @@ struct EliminationForestWorkspace {
 //
 // The approach makes use of Tarjan's path compression within an auxiliary
 // 'ancestors' array, which can either be provided or allocated.
-template <class Field>
-void EliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForest(const Matrix& matrix,
                        const SymmetricOrdering& ordering, Buffer<Int>* parents);
-template <class Field>
-void EliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForest(const Matrix& matrix,
                        const SymmetricOrdering& ordering, Buffer<Int>* parents,
                        Buffer<Int>* ancestors);
 
@@ -54,13 +54,13 @@ void PostorderFromEliminationForest(const Buffer<Int>& parents,
 //
 //   Gilbert, Ng, and Peyton, "An efficient algorithm to compute row and column
 //   counts for sparse Cholesky factorization", 1992.
-template <class Field>
-void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void DegreesFromEliminationForest(const Matrix& matrix,
                                   const Buffer<Int>& parents,
                                   const Buffer<Int>& postorder,
                                   Buffer<Int>* degrees);
-template <class Field>
-void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void DegreesFromEliminationForest(const Matrix& matrix,
                                   const SymmetricOrdering& ordering,
                                   const Buffer<Int>& parents,
                                   const Buffer<Int>& postorder,
@@ -70,19 +70,19 @@ void DegreesFromEliminationForest(const CoordinateMatrix<Field>& matrix,
 // structures of a scalar (simplicial) LDL' factorization.
 //
 // Cf. Tim Davis's "LDL"'s symbolic factorization.
-template <class Field>
-void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void SimpleEliminationForestAndDegrees(const Matrix& matrix,
                                        Buffer<Int>* parents,
                                        Buffer<Int>* degrees);
-template <class Field>
-void SimpleEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void SimpleEliminationForestAndDegrees(const Matrix& matrix,
                                        const SymmetricOrdering& ordering,
                                        Buffer<Int>* parents,
                                        Buffer<Int>* degrees);
 
-template <class Field>
+template <class Matrix>
 void ParallelEliminationForestAndDegrees(
-    const CoordinateMatrix<Field>& matrix, const SymmetricOrdering& ordering,
+    const Matrix& matrix, const SymmetricOrdering& ordering,
     Buffer<Int>* parents, Buffer<Int>* degrees,
     EliminationForestWorkspace* workspace = nullptr);
 
@@ -98,11 +98,11 @@ void OpenMPSimpleEliminationForestAndDegrees(
 //
 // This approach uses the fast path decomposition/compression of
 // Gilbert/Ng/Peyton.
-template <class Field>
-void EliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForestAndDegrees(const Matrix& matrix,
                                  Buffer<Int>* parents, Buffer<Int>* degrees);
-template <class Field>
-void EliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+void EliminationForestAndDegrees(const Matrix& matrix,
                                  const SymmetricOrdering& ordering,
                                  Buffer<Int>* parents, Buffer<Int>* degrees);
 #ifdef CATAMARI_OPENMP
@@ -115,8 +115,8 @@ void OpenMPEliminationForestAndDegrees(const CoordinateMatrix<Field>& matrix,
 
 // Computes the nonzero pattern of L(row, :) in
 // row_structure[0 : num_packed - 1].
-template <class Field>
-Int ComputeRowPattern(const CoordinateMatrix<Field>& matrix,
+template <class Matrix>
+Int ComputeRowPattern(const Matrix& matrix,
                       const SymmetricOrdering& ordering,
                       const Buffer<Int>& parents, Int row, Int* pattern_flags,
                       Int* row_structure);
