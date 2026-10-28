@@ -729,13 +729,13 @@ void ParallelFillStructureIndices(const Matrix& matrix,
   // (These are allocated on demand in parallel...)
   Buffer_mimalloc<Buffer_mimalloc<Int>> private_pattern_flags;
   {
-    BENCHMARK_SCOPED_TIMER_SECTION timer("Pattern workspace setup");
+    // BENCHMARK_SCOPED_TIMER_SECTION timer("Pattern workspace setup");
     // Arena indices can exceed the global concurrency limit.
     private_pattern_flags.Resize(tbb::this_task_arena::max_concurrency()); // WARNING: get_max_num_tbb_threads() leads to a crash due to noncontiguous thread indices after repeated calls to `set_max_num_tbb_t hreads`...
   }
 
   {
-    BENCHMARK_SCOPED_TIMER_SECTION timer("Build structure indices");
+    // BENCHMARK_SCOPED_TIMER_SECTION timer("Build structure indices");
     tbb::task_group tg;
     for (const Int root : ordering.assembly_forest.roots) {
       tg.run([root, &matrix, &ordering, &supernode_member_to_index,
@@ -750,7 +750,7 @@ void ParallelFillStructureIndices(const Matrix& matrix,
 
   // Sort the structures.
   {
-    BENCHMARK_SCOPED_TIMER_SECTION timer("Sort structure indices");
+    // BENCHMARK_SCOPED_TIMER_SECTION timer("Sort structure indices");
     const Int num_supernodes = ordering.supernode_sizes.Size();
     parallel_for_range(num_supernodes, [&](Int s) {
       std::sort(lower_factor->StructureBeg(s),
@@ -758,7 +758,7 @@ void ParallelFillStructureIndices(const Matrix& matrix,
     }, sort_grain_size, std::max(1000, 2 * sort_grain_size));
   }
   {
-    BENCHMARK_SCOPED_TIMER_SECTION timer("Pattern workspace cleanup");
+    // BENCHMARK_SCOPED_TIMER_SECTION timer("Pattern workspace cleanup");
     private_pattern_flags.Clear();
   }
 }

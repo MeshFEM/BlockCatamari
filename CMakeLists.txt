@@ -156,7 +156,7 @@ meshfem_download_project(mantis
 meshfem_download_project(quotient
     SOURCE_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/subprojects/quotient
     GIT_REPOSITORY https://github.com/MeshFEM/quotient
-    GIT_TAG        90234550d2899153424d30fbb1f85f001bae90cd
+    GIT_TAG        4a2965926a58a7110053d161ecf256e561cc5680
     GIT_SUBMODULES_RECURSE TRUE
 )
 
