@@ -82,6 +82,11 @@ struct ConversionPlan {
             factorValues[overrides[k].dst] = Field(overrides[k].value);
     }
 
+    // Numerically guard an analytically positive-semidefinite matrix by
+    // replacing each diagonal entry d with (1 + epsilon) d during injection.
+    // Conversion-plan overrides are applied afterward.
+    double diagonalPerturbationEpsilon = 0.0;
+
     bool isBlock = false;
 private:
     Buffer<Entry> m_entries;
@@ -517,6 +522,14 @@ class Factorization {
   };
   MatrixData m_inputData;
 
+  void ApplyDiagonalPerturbation(Int begin, Int end, BlasMatrixView<Field> &diagonal_block) {
+      const double epsilon = m_inputData.cplan->diagonalPerturbationEpsilon;
+      if (epsilon == 0.0) return;
+      const Field multiplier = Field(1.0 + epsilon);
+      for (Int c = begin; c < end; ++c)
+          diagonal_block(c, c) *= multiplier;
+  }
+
   // Initialize column `j` of the factor by zero-initializing it and then copying
   // in values of the matrix `A` or `A + sigma B`
   void InitializeFactorColumn(Int j, Int local_j, BlasMatrixView<Field> &diagonal_block) {
@@ -525,6 +538,7 @@ class Factorization {
       Int numColumnEntries = diagonal_block.leading_dim - local_j; // Number of nonzero entries on the diagonal of L and below
       VMap(diagonal_block.Pointer(local_j, local_j), numColumnEntries).setZero();
       m_inputData.injectEntries(j, factor_values_.Data(), diagonal_block(local_j, local_j));
+      ApplyDiagonalPerturbation(local_j, local_j + 1, diagonal_block);
       m_inputData.cplan->applyOverrides(j, j + 1, factor_values_.Data());
   }
 
@@ -538,6 +552,7 @@ class Factorization {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
       }
+      ApplyDiagonalPerturbation(local_j, local_j + BlockSize, diagonal_block);
       m_inputData.cplan->applyOverrides(j, j + BlockSize, factor_values_.Data());
   }
 
@@ -549,6 +564,7 @@ class Factorization {
           for (Int c = jstart; c < jend; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      ApplyDiagonalPerturbation(jstart, jend, diagonal_block);
       m_inputData.cplan->applyOverrides(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
   }
 
@@ -560,6 +576,7 @@ class Factorization {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      ApplyDiagonalPerturbation(0, supernode_size, diagonal_block);
       m_inputData.cplan->applyOverrides(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
   }
 
@@ -574,6 +591,7 @@ class Factorization {
           for (Int c = 0; c < BlockSize; ++c)
               diagonal_block(local_j + c, local_j + c) += m_inputData.sigma;
       }
+      ApplyDiagonalPerturbation(local_j, local_j + BlockSize, diagonal_block);
       m_inputData.cplan->applyOverrides(j, j + BlockSize, factor_values_.Data());
   }
 
@@ -586,6 +604,7 @@ class Factorization {
           for (Int c = jstart; c < jend; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      ApplyDiagonalPerturbation(jstart, jend, diagonal_block);
       m_inputData.cplan->applyOverrides(supernode_offset + jstart, supernode_offset + jend, factor_values_.Data());
   }
 
@@ -598,6 +617,7 @@ class Factorization {
           for (Int c = 0; c < supernode_size; ++c)
               diagonal_block(c, c) += m_inputData.sigma;
       }
+      ApplyDiagonalPerturbation(0, supernode_size, diagonal_block);
       m_inputData.cplan->applyOverrides(supernode_offset, supernode_offset + supernode_size, factor_values_.Data());
   }
 
